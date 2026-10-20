@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+.tmp_*/
+
+# Private media and model weights stay local
+input/*
+!input/.gitkeep
+output/*
+!output/.gitkeep
+models/*
+!models/.gitkeep
