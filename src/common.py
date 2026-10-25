@@ -107,17 +107,27 @@ def probe_video(path: Path) -> VideoInfo:
     proc = subprocess.run(
         ["ffprobe", "-v", "error", "-print_format", "json",
          "-show_streams", "-show_format", str(path)],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=False,
     )
     if proc.returncode != 0:
+        stderr = proc.stderr.decode("utf-8", errors="replace").strip()
         raise ToolError(
             f"ffprobe could not read {show(path)}; the file may be corrupt or not a video.\n"
-            f"ffprobe said: {proc.stderr.strip()[-400:]}"
+            f"ffprobe said: {stderr[-400:]}"
         )
+    stdout = proc.stdout.decode("utf-8", errors="replace")
+    cleaned = stdout.lstrip("\x00\ufeff")
+    json_start = cleaned.find("{")
+    if json_start > 0:
+        cleaned = cleaned[json_start:]
+    json_end = cleaned.rfind("}")
+    if json_end >= 0 and json_end + 1 < len(cleaned):
+        cleaned = cleaned[: json_end + 1]
     try:
-        data = json.loads(proc.stdout)
+        data = json.loads(cleaned)
     except json.JSONDecodeError:
-        raise ToolError(f"ffprobe returned unreadable output for {show(path)}.")
+        raise ToolError(f"ffprobe returned unreadable output for {show(path)}. Output began: {cleaned[:200]!r}")
 
     streams = data.get("streams", [])
     # Skip cover-art streams; they are "video" streams with a single frame.

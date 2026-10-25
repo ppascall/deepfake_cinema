@@ -125,8 +125,10 @@ of the movie, the script says so. On Windows, use PowerShell instead of bash:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts\make_test_clip.ps1
-powershell -ExecutionPolicy Bypass -File scripts\make_test_clip.ps1 -Start 00:01:10 -Duration 5
+powershell -ExecutionPolicy Bypass -File scripts\make_test_clip.ps1 -Video input\movie.mp4 -OutputPath input\test_clip.mp4 -StartTime 00:01:10 -ClipDuration 5
 ```
+
+The script also accepts the older aliases `-Input`, `-Output`, `-Start`, `-Duration`, and `-Height` for compatibility, but `-Video` and `-OutputPath` are the safer names because PowerShell reserves `$input`.
 
 Optional, check which face would be picked before a long run:
 
