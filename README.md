@@ -22,6 +22,16 @@ input/movie.mp4 --OpenCV--> frame --detect largest face--> swap (InSwapper, ONNX
 
 ## 1. System packages
 
+Windows (PowerShell):
+
+```powershell
+winget install Gyan.Dev.FFmpeg
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
+
 Ubuntu / Debian / Linux Mint:
 
 ```bash
@@ -36,13 +46,24 @@ Other distributions (equivalents, not tested here):
 | Fedora | `sudo dnf install python3 python3-pip ffmpeg git` (FFmpeg needs the RPM Fusion repository enabled) |
 | Arch | `sudo pacman -S python python-pip ffmpeg git` |
 
-Check: `python3 --version`, `ffmpeg -version`, `ffprobe -version`. Python 3.10+ is required (3.12 was tested).
+Check: `python --version`, `ffmpeg -version`, `ffprobe -version`. Python 3.10+ is required (3.12 was tested).
 
 ## 2. Python environment
+
+Linux / macOS:
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+```
+
+Windows:
+
+```powershell
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
@@ -100,7 +121,12 @@ scripts/make_test_clip.sh -h                      # all options
 ```
 
 The original is only read. Audio is optional (videos without audio work). If the start time is past the end
-of the movie, the script says so.
+of the movie, the script says so. On Windows, use PowerShell instead of bash:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\make_test_clip.ps1
+powershell -ExecutionPolicy Bypass -File scripts\make_test_clip.ps1 -Start 00:01:10 -Duration 5
+```
 
 Optional, check which face would be picked before a long run:
 

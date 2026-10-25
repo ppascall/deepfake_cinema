@@ -3,11 +3,17 @@ from __future__ import annotations
 
 import importlib
 import os
+import platform
 import shutil
 import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+
+try:
+    import ctypes
+except ImportError:  # pragma: no cover - stdlib fallback
+    ctypes = None
 
 from .common import (DEFAULT_DETECTOR, DEFAULT_RECOGNIZER, DEFAULT_SWAPPER, CPU_PROVIDERS,
                      ToolError, probe_video, show)
@@ -44,9 +50,12 @@ def _check_import(module: str, pip_name: str | None = None) -> Check:
 def _check_binary(name: str) -> Check:
     path = shutil.which(name)
     if not path:
-        return Check(FAIL, f"{name} on PATH", "not found",
-                     "Install FFmpeg: sudo apt install ffmpeg (Debian/Ubuntu/Mint), "
-                     "sudo dnf install ffmpeg (Fedora + RPM Fusion), sudo pacman -S ffmpeg (Arch).")
+        install_hint = (
+            "Install FFmpeg: winget install Gyan.Dev.FFmpeg (Windows), "
+            "sudo apt install ffmpeg (Debian/Ubuntu/Mint), "
+            "sudo dnf install ffmpeg (Fedora + RPM Fusion), sudo pacman -S ffmpeg (Arch)."
+        )
+        return Check(FAIL, f"{name} on PATH", "not found", install_hint)
     try:
         first = subprocess.run([name, "-version"], capture_output=True, text=True).stdout.splitlines()[0]
     except Exception:
@@ -69,7 +78,53 @@ def _check_ort_cpu() -> Check:
     return Check(OK, "ONNX Runtime CPU provider", note)
 
 
+def _read_windows_cpu_name() -> str:
+    cpu = platform.processor() or "unknown CPU"
+    if cpu and cpu != "":
+        return cpu
+    return "unknown CPU"
+
+
+def _read_windows_ram_gb() -> float | None:
+    if ctypes is None:
+        return None
+    try:
+        class MEMORYSTATUSEX(ctypes.Structure):
+            _fields_ = [
+                ("dwLength", ctypes.c_ulong),
+                ("dwMemoryLoad", ctypes.c_ulong),
+                ("ullTotalPhys", ctypes.c_ulonglong),
+                ("ullAvailPhys", ctypes.c_ulonglong),
+                ("ullTotalPageFile", ctypes.c_ulonglong),
+                ("ullAvailPageFile", ctypes.c_ulonglong),
+                ("ullTotalVirtual", ctypes.c_ulonglong),
+                ("ullAvailVirtual", ctypes.c_ulonglong),
+                ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+            ]
+
+        mem = MEMORYSTATUSEX()
+        mem.dwLength = ctypes.sizeof(mem)
+        if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(mem)):
+            return mem.ullAvailPhys / (1024**3)
+    except Exception:
+        pass
+    return None
+
+
 def _check_machine() -> list[Check]:
+    if platform.system() == "Windows":
+        model = _read_windows_cpu_name()
+        checks = [Check(OK, "CPU", f"{model}, {os.cpu_count()} logical cores")]
+        ram_gb = _read_windows_ram_gb()
+        if ram_gb is None:
+            return checks
+        if ram_gb < 4:
+            checks.append(Check(WARN, "Available RAM", f"{ram_gb:.1f} GB",
+                                "Low memory. Close other applications or use a smaller --scale-height."))
+        else:
+            checks.append(Check(OK, "Available RAM", f"{ram_gb:.1f} GB"))
+        return checks
+
     model = "unknown CPU"
     try:
         for line in Path("/proc/cpuinfo").read_text().splitlines():

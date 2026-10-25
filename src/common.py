@@ -48,6 +48,11 @@ def fmt_duration(seconds: float) -> str:
 def require_tool(name: str) -> str:
     path = shutil.which(name)
     if not path:
+        if os.name == "nt":
+            raise ToolError(
+                f"'{name}' was not found on PATH. Install FFmpeg via winget, e.g. "
+                "'winget install Gyan.Dev.FFmpeg' or add ffmpeg to PATH, then retry."
+            )
         raise ToolError(
             f"'{name}' was not found on PATH. Install FFmpeg, e.g. "
             "'sudo apt install ffmpeg' (Debian/Ubuntu/Mint), "
