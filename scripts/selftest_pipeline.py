@@ -60,13 +60,14 @@ def main() -> int:
         process_video.load_source_face = lambda *a, **k: (SimpleNamespace(), None)
 
         args = ["--video", str(src), "--source-face", str(photo), "--model", str(model),
-                "--output", str(out), "--scale-height", "180", "--max-seconds", "3"]
+                "--output", str(out), "--scale-height", "180", "--max-seconds", "3", "--fps", "20"]
         assert process_video.main(args) == 0, "first run failed"
 
         info = probe_video(out)
         assert info.has_audio, "output has no audio"
         assert (info.width, info.height) == (320, 180), f"unexpected size {info.width}x{info.height}"
-        assert info.nb_frames == 75, f"expected 75 frames, got {info.nb_frames}"
+        assert info.nb_frames == 60, f"expected 60 frames, got {info.nb_frames}"
+        assert abs(info.fps - 20) < 0.01, f"unexpected fps {info.fps}"
         assert abs(info.duration - 3.0) < 0.15, f"unexpected duration {info.duration}"
         assert not list(out.parent.glob(".tmp_*")), "temporary files were not cleaned up"
 

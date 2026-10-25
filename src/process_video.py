@@ -38,8 +38,11 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--rec-model", type=Path, default=DEFAULT_RECOGNIZER, help="Face recognition ONNX model.")
     ap.add_argument("--output", type=Path, default=DEFAULT_OUTPUT, help="Output .mp4 path.")
     ap.add_argument("--device", choices=["cpu"], default="cpu", help="Only CPU inference is supported.")
-    ap.add_argument("--max-seconds", type=float, default=None,
-                    help="Process only the first N seconds (use for tests).")
+    ap.add_argument("--max-seconds", type=float, default=5.0,
+                    help="Process only the first N seconds (0 = whole video).")
+    ap.add_argument("--fps", type=float, default=20.0,
+                    help="Output frame rate; frames are dropped by timestamp, never duplicated "
+                         "(0 = keep the source rate).")
     ap.add_argument("--scale-height", type=int, default=720,
                     help="Downscale to this height, keeping aspect ratio (never upscales; 0 = keep original).")
     ap.add_argument("--det-size", type=int, default=640,
@@ -52,8 +55,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def validate_args(args) -> None:
-    if args.max_seconds is not None and args.max_seconds <= 0:
-        raise ToolError("--max-seconds must be greater than 0.")
+    if args.max_seconds < 0:
+        raise ToolError("--max-seconds must be greater than 0 (or 0 for the whole video).")
+    if args.fps < 0:
+        raise ToolError("--fps must be greater than 0 (or 0 to keep the source frame rate).")
     if args.scale_height < 0:
         raise ToolError("--scale-height must be 0 or a positive number of pixels.")
     if args.scale_height and args.scale_height < 64:
@@ -71,11 +76,20 @@ def target_size(width: int, height: int, scale_height: int) -> tuple[int, int]:
     return max(width & ~1, 2), max(height & ~1, 2)
 
 
-def print_plan(info, args, frames_planned: int, out_w: int, out_h: int) -> None:
-    seconds = frames_planned / info.fps
+def plan_frames(info, args) -> tuple[float, int, int | None]:
+    """Return (output fps, frames to produce, frame limit or None)."""
+    out_fps = min(args.fps, info.fps) if args.fps else info.fps
+    total = max(int(round(info.nb_frames * out_fps / info.fps)), 1)
+    limit = int(round(args.max_seconds * out_fps)) if args.max_seconds else None
+    return out_fps, (min(total, limit) if limit else total), limit
+
+
+def print_plan(info, out_fps: float, frames_planned: int, out_w: int, out_h: int) -> None:
+    seconds = frames_planned / out_fps
     print(f"Video:   {show(info.path)}  {info.width}x{info.height} @ {info.fps:.2f} fps, "
           f"{info.duration:.1f}s, audio: {'yes' if info.has_audio else 'no'}")
-    print(f"Plan:    {frames_planned} frames ({fmt_duration(seconds)} of video) at {out_w}x{out_h}")
+    print(f"Plan:    {frames_planned} frames ({fmt_duration(seconds)} of video) at {out_w}x{out_h}, "
+          f"{out_fps:g} fps output")
     print("Time:    frames / (processed frames per second). Example: "
           + ", ".join(f"{r:g} fps -> {fmt_duration(frames_planned / r)}" for r in (1, 2, 5))
           + " (plus encoding). Real speed is measured during the run.")
@@ -115,11 +129,10 @@ def process(args) -> int:
         out_dir = args.output.expanduser().resolve().parent
         checks = run_checks(args.video, args.source_face, args.model, args.det_model, args.rec_model, out_dir)
         ready = print_report(checks)
-        limit_frames = int(args.max_seconds * info.fps) if args.max_seconds else None
-        frames_planned = min(info.nb_frames, limit_frames) if limit_frames else info.nb_frames
+        out_fps, frames_planned, _ = plan_frames(info, args)
         out_w, out_h = target_size(info.width, info.height, args.scale_height)
         print()
-        print_plan(info, args, frames_planned, out_w, out_h)
+        print_plan(info, out_fps, frames_planned, out_w, out_h)
         if args.output.exists() and not args.overwrite:
             print(f"Note: {show(args.output)} exists; a real run needs --overwrite or another --output.")
         print("Dry run: nothing was processed.")
@@ -150,25 +163,34 @@ def process(args) -> int:
 
     # Use the decoded frame size (OpenCV applies rotation metadata), not the ffprobe size.
     out_w, out_h = target_size(frame.shape[1], frame.shape[0], args.scale_height)
-    frame_limit = int(round(args.max_seconds * info.fps)) if args.max_seconds else None
-    frames_planned = min(info.nb_frames, frame_limit) if frame_limit else info.nb_frames
-    print_plan(info, args, frames_planned, out_w, out_h)
+    out_fps, frames_planned, frame_limit = plan_frames(info, args)
+    print_plan(info, out_fps, frames_planned, out_w, out_h)
     if info.vfr_suspected:
         print("Warning: variable frame rate detected; audio may drift. Convert to constant frame rate first.")
-    check_free_space(output.parent, int(3e6 * frames_planned / info.fps) + int(2e8))
+    check_free_space(output.parent, int(3e6 * frames_planned / out_fps) + int(2e8))
 
     tmp_dir = output.parent / f".tmp_{output.stem}_{os.getpid()}"
     tmp_dir.mkdir(parents=True, exist_ok=True)
     silent = tmp_dir / "silent.mp4"
     writer_log = tmp_dir / "ffmpeg_writer.log"
-    writer, log_file = open_silent_writer(silent, writer_log, out_w, out_h, info.fps)
+    writer, log_file = open_silent_writer(silent, writer_log, out_w, out_h, out_fps)
 
-    counts = dict(read=0, swapped=0, no_face=0, errors=0)
+    def next_frame():
+        ok, f = cap.read()
+        return f if ok else None
+
+    counts = dict(read=0, swapped=0, no_face=0, errors=0)  # "read" = frames processed (output frames)
     consecutive_errors = 0
+    src_index = 0
     start = last_report = time.monotonic()
     success = False
     try:
         while frame is not None:
+            # Keep a source frame only when its timestamp reaches the next output frame's timestamp.
+            if src_index * out_fps + 1e-6 < counts["read"] * info.fps:
+                src_index += 1
+                frame = next_frame()
+                continue
             if (frame.shape[1], frame.shape[0]) != (out_w, out_h):
                 frame = cv2.resize(frame, (out_w, out_h), interpolation=cv2.INTER_AREA)
             counts["read"] += 1
@@ -198,9 +220,8 @@ def process(args) -> int:
                 print_progress(counts, frames_planned, now - start)
             if frame_limit and counts["read"] >= frame_limit:
                 break
-            ok, frame = cap.read()
-            if not ok:
-                frame = None
+            src_index += 1
+            frame = next_frame()
 
         writer.stdin.close()
         if writer.wait() != 0:
@@ -212,7 +233,7 @@ def process(args) -> int:
 
         print("Adding original audio...")
         final_tmp = tmp_dir / "final.mp4"
-        limit = counts["read"] / info.fps if frame_limit else None
+        limit = counts["read"] / out_fps if frame_limit else None
         mux_audio(silent, info, final_tmp, limit)
         os.replace(final_tmp, output)
         success = True

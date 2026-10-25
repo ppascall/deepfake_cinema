@@ -120,7 +120,8 @@ python -m src.process_video \
   --device cpu
 ```
 
-Add `--max-seconds 5` for an even smaller first run, and `--dry-run` to only validate everything and see the
+By default only the first **5 seconds** are processed and the output is **20 fps**; use `--max-seconds 0` for
+the whole video and `--fps 0` to keep the source frame rate. Add `--dry-run` to only validate everything and see the
 plan. Progress (percent, frame count, fps, elapsed, ETA, swapped / no-face / error counts) is printed every
 few seconds. Frames that fail are left unchanged and reported; 50 consecutive failures abort the run.
 
@@ -136,7 +137,8 @@ head turns and audio sync.
 | `--model` / `--det-model` / `--rec-model` | see section 3 | model paths |
 | `--output` | `output/final_movie.mp4` | must end in `.mp4` |
 | `--overwrite` | off | replace an existing output (otherwise you are asked for another filename, or the run stops when not interactive) |
-| `--max-seconds N` | whole video | process only the first N seconds |
+| `--max-seconds N` | `5` | process only the first N seconds (`0` = whole video) |
+| `--fps R` | `20` | output frame rate; source frames are dropped by timestamp, never duplicated, so audio stays in sync (`0` = keep source rate) |
 | `--scale-height H` | `720` | downscale to height H, aspect ratio kept, never upscales (`0` = keep) |
 | `--det-size N` | `640` | detector input size (multiple of 32); smaller is faster, may miss small faces |
 | `--device` | `cpu` | only CPU is supported |
@@ -157,8 +159,9 @@ estimate, not a measurement: the program prints the real speed. Suggested progre
 then 1-2 min, and the full movie only after calculating the expected runtime and disk space (about 3 MB per
 second of video is reserved, plus a margin).
 
-High frame rates multiply the cost: `input/movie.mp4` is 60 fps, so every second is 60 frames. Halve the work
-by making a 30 fps working copy first (audio kept, original untouched):
+High frame rates multiply the cost: `input/movie.mp4` is 60 fps, so every second is 60 frames. The default
+`--fps 20` already processes only one in three frames of that source. To use another rate, pass `--fps`;
+you can also make a lower-rate working copy first (audio kept, original untouched):
 
 ```bash
 ffmpeg -i input/movie.mp4 -map 0:v:0 -map 0:a:0? -r 30 -c:v libx264 -crf 18 -c:a aac input/movie_30fps.mp4
