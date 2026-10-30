@@ -69,23 +69,18 @@ def load_onnx_model(path: Path, what: str):
     return model
 
 
-class FaceAnalyzer:
-    """SCRFD detector + ArcFace recognizer."""
+class FaceDetector:
+    """SCRFD detector that returns face boxes and landmarks without recognition."""
 
     def __init__(self, detector_path: Path = DEFAULT_DETECTOR,
-                 recognizer_path: Path = DEFAULT_RECOGNIZER,
                  det_size: int = 640, det_thresh: float = 0.5):
         self.det = load_onnx_model(detector_path, "face detector")
         if not hasattr(self.det, "detect"):
             raise ToolError(f"{show(detector_path)} is not a face-detection model (expected SCRFD det_10g.onnx).")
-        self.rec = load_onnx_model(recognizer_path, "face recognizer")
-        if not hasattr(self.rec, "get_feat"):
-            raise ToolError(f"{show(recognizer_path)} is not a face-recognition model (expected ArcFace w600k_r50.onnx).")
         self.det.prepare(-1, input_size=(det_size, det_size), det_thresh=det_thresh)
-        self.rec.prepare(-1)
 
     def detect(self, img):
-        """Return faces (insightface Face objects with bbox, kps, det_score), no embedding yet."""
+        """Return faces (InsightFace Face objects with bbox, kps, det_score)."""
         from insightface.app.common import Face
         bboxes, kpss = self.det.detect(img, max_num=0, metric="default")
         if bboxes is None or bboxes.shape[0] == 0:
@@ -94,6 +89,19 @@ class FaceAnalyzer:
             raise ToolError("The detector model returned no landmarks; use SCRFD det_10g.onnx.")
         return [Face(bbox=bboxes[i, :4], kps=kpss[i], det_score=bboxes[i, 4])
                 for i in range(bboxes.shape[0])]
+
+
+class FaceAnalyzer(FaceDetector):
+    """SCRFD detector + ArcFace recognizer."""
+
+    def __init__(self, detector_path: Path = DEFAULT_DETECTOR,
+                 recognizer_path: Path = DEFAULT_RECOGNIZER,
+                 det_size: int = 640, det_thresh: float = 0.5):
+        super().__init__(detector_path, det_size=det_size, det_thresh=det_thresh)
+        self.rec = load_onnx_model(recognizer_path, "face recognizer")
+        if not hasattr(self.rec, "get_feat"):
+            raise ToolError(f"{show(recognizer_path)} is not a face-recognition model (expected ArcFace w600k_r50.onnx).")
+        self.rec.prepare(-1)
 
     def embed(self, img, face):
         self.rec.get(img, face)

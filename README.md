@@ -156,6 +156,62 @@ few seconds. Frames that fail are left unchanged and reported; 50 consecutive fa
 Inspect the result with a media player or `ffplay output/test_result.mp4`. Check face placement, flicker,
 head turns and audio sync.
 
+## Optional: consent-based live face capture
+
+The capture utility is a separate, opt-in tool. It detects faces in a live camera feed and saves a still
+JPEG only when you press `S`; it does not recognize identities, record video, upload images, or start the
+face-swap pipeline. Use it only with the photographed person's knowledge and consent, and with an authorized
+camera feed. The largest detected face is highlighted as the selected face.
+
+The existing OpenCV, InsightFace, ONNX Runtime, NumPy, and SCRFD detector model are used; the capture tool
+does not load the ArcFace recognizer or swapper. No new package is required. Ensure your OpenCV install
+supports display windows before using interactive capture.
+
+For a single command that waits five seconds, captures the highlighted face, and immediately runs the
+existing processor on the default `input/movie.mp4`:
+
+```bash
+python -m src.capture_face --capture-and-process
+```
+
+The preview remains visible during the countdown. Be the only intended face in view when the countdown
+ends; if no face is detected yet, capture waits until one is visible. Press `Q` or Escape to cancel without
+processing. The captured image is saved locally, then passed as `--source-face` to the existing processor.
+The default video and output are `input/movie.mp4` and `output/final_movie.mp4`; use `--video` and `--output`
+to change them, `--model` to select the authorized swapper, or `--capture-delay` to adjust the countdown.
+The existing processor defaults to a five-second output; add `--max-seconds 0` to process the whole video.
+Use `--overwrite` only if you intend to replace an existing output file. This convenience mode does not
+replace the ordinary manual capture mode below.
+
+```bash
+# Default webcam (camera index 0)
+python -m src.capture_face --camera 0
+
+# An operator-supplied IP-camera/RTSP stream; the URL is not displayed or saved by the tool
+python -m src.capture_face --stream-url "rtsp://camera-host:554/stream"
+
+# Check dependencies and the detector file without opening a camera
+python -m src.capture_face --dry-run
+```
+
+In ordinary capture mode, press `S` only when the intended consenting person is visible and the highlighted
+face is correct. In either mode, the image is cropped with a small margin and saved under `input/captured_faces` as
+`face_YYYYMMDD_HHMMSS.jpg`; an existing name is preserved and a numeric suffix is added. Press `Q` or
+Escape to quit. Use `--output-dir` to choose another local directory and `--prefix` to change the filename
+prefix. `--det-model` and `--det-size` configure the detector.
+
+Inspect the saved JPEG before using it. Nothing passes it to the swapper automatically; if appropriate and
+authorized, select it explicitly in a later run:
+
+```bash
+python -m src.process_video \
+  --video input/test_clip.mp4 \
+  --source-face input/captured_faces/face_YYYYMMDD_HHMMSS.jpg \
+  --model models/inswapper_128.onnx \
+  --output output/test_result.mp4 \
+  --device cpu
+```
+
 ### Options
 
 | Option | Default | Meaning |
@@ -216,6 +272,7 @@ scripts/check_environment.py             environment check
 scripts/make_test_clip.sh                short test clip
 scripts/selftest_pipeline.py             pipeline self-test with stub models
 src/process_video.py                     main command
+src/capture_face.py                      optional, explicit live still capture
 src/detect_faces.py                      detection/embedding + face inspection command
 src/environment.py  src/common.py        shared checks and helpers (added to the suggested layout)
 ```
@@ -233,6 +290,13 @@ The project root is this folder (not a nested `movie-face-demo/`).
 * **No face detected in the video** (`no-face` count high, nothing swapped): check a frame with
   `python -m src.detect_faces --video ... --time N --annotate output/faces.jpg`; try larger `--det-size`,
   a higher `--scale-height`, or a different scene. Profiles, occlusion and low light are hard cases.
+* **Camera capture cannot open or read**: check operating-system camera permissions, close other apps
+  using the webcam, confirm the `--camera` index, or verify the operator-provided stream is reachable and
+  authorized. Stream credentials are not printed by the capture utility.
+* **Capture window does not open**: use an OpenCV installation with GUI support and run from a desktop
+  session; headless OpenCV builds cannot show the live preview.
+* **No face detected during capture**: improve lighting, bring the face closer and into view, and wait for
+  the on-screen status to show a selected face. Saving is only enabled after a face is detected.
 * **Missing or incompatible ONNX model**: the tools print the missing path or the signature problem; see
   section 3. Files under ~1 KB or truncated copies are rejected.
 * **Model license / access issues**: see section 3. Do not substitute unofficial downloads.
