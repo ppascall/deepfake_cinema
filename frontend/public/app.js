@@ -7,8 +7,12 @@ const statusElement = document.querySelector("#status");
 const logsElement = document.querySelector("#logs");
 const cameraStatus = document.querySelector("#camera-status");
 const preview = document.querySelector("#preview");
+const showVideoInput = document.querySelector("#show-video");
+const outputVideoSection = document.querySelector("#output-video-section");
+const outputVideo = document.querySelector("#output-video");
 let captureInProgress = false;
 let cancelRequested = false;
+let processingState = "idle";
 
 const stateLabels = {
   idle: "Ready",
@@ -24,10 +28,12 @@ async function updateStatus() {
       throw new Error(`Status request failed (${response.status}).`);
     }
     const status = await response.json();
+    processingState = status.state;
     if (!captureInProgress) {
       statusElement.textContent = stateLabels[status.state] || status.state;
     }
     startButton.disabled = captureInProgress || status.state === "running";
+    updateOutputVideo();
     logsElement.textContent = status.logs.length ? status.logs.join("\n") : "No output yet.";
     logsElement.scrollTop = logsElement.scrollHeight;
   } catch (error) {
@@ -36,6 +42,23 @@ async function updateStatus() {
     }
   }
 }
+
+function updateOutputVideo() {
+  const shouldShow = showVideoInput.checked && processingState === "succeeded";
+  outputVideoSection.hidden = !shouldShow;
+  if (shouldShow) {
+    if (!outputVideo.src) {
+      outputVideo.src = `/api/output?run=${Date.now()}`;
+      outputVideo.load();
+    }
+  } else if (outputVideo.src) {
+    outputVideo.pause();
+    outputVideo.removeAttribute("src");
+    outputVideo.load();
+  }
+}
+
+showVideoInput.addEventListener("change", updateOutputVideo);
 
 function stopCamera(stream) {
   for (const track of stream.getTracks()) {

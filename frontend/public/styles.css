@@ -98,10 +98,30 @@ code {
   color: #d6dbea;
 }
 
+.video-option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 20px 0;
+  color: #d6dbea;
+}
+
+.output-video {
+  margin: 24px 0;
+}
+
+.output-video h2 {
+  font-size: 1.1rem;
+}
+
 input {
   width: 18px;
   height: 18px;
   accent-color: #8ba8ff;
+}
+
+[hidden] {
+  display: none !important;
 }
 
 button {

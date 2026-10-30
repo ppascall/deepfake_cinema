@@ -2,6 +2,7 @@
 
 const http = require("node:http");
 const { spawn } = require("node:child_process");
+const { createReadStream } = require("node:fs");
 const fs = require("node:fs/promises");
 const path = require("node:path");
 
@@ -10,6 +11,7 @@ const MAX_LOG_LINES = 500;
 const MAX_LOG_LINE_LENGTH = 2000;
 const MAX_CAPTURE_BYTES = 5 * 1024 * 1024;
 const DEFAULT_CAPTURE_DIRECTORY = path.join(PROJECT_ROOT, "output", "captured_faces");
+const DEFAULT_OUTPUT_VIDEO = path.join(PROJECT_ROOT, "output", "final_movie.mp4");
 const STATIC_FILES = new Map([
   ["/", ["index.html", "text/html; charset=utf-8"]],
   ["/index.html", ["index.html", "text/html; charset=utf-8"]],
@@ -21,6 +23,7 @@ function createServer({
   spawnProcess = spawn,
   python = process.env.PYTHON || "python3",
   captureDirectory = DEFAULT_CAPTURE_DIRECTORY,
+  outputVideo = DEFAULT_OUTPUT_VIDEO,
 } = {}) {
   const run = {
     state: "idle",
@@ -164,11 +167,87 @@ function createServer({
     return true;
   }
 
+  async function serveOutputVideo(request, response) {
+    if (run.state !== "succeeded") {
+      response.writeHead(404, { "cache-control": "no-store" });
+      response.end();
+      return;
+    }
+
+    let fileInfo;
+    try {
+      fileInfo = await fs.stat(outputVideo);
+      if (!fileInfo.isFile()) {
+        response.writeHead(404, { "cache-control": "no-store" });
+        response.end();
+        return;
+      }
+    } catch (error) {
+      if (error.code === "ENOENT") {
+        response.writeHead(404, { "cache-control": "no-store" });
+        response.end();
+        return;
+      }
+      console.error("Could not inspect the processed video:", error);
+      sendJson(response, 500, { error: "The processed video could not be opened." });
+      return;
+    }
+
+    const headers = {
+      "content-type": "video/mp4",
+      "accept-ranges": "bytes",
+      "cache-control": "no-store",
+      "x-content-type-options": "nosniff",
+    };
+    const range = request.headers.range;
+    let start = 0;
+    let end = fileInfo.size - 1;
+    let statusCode = 200;
+    if (range) {
+      const match = /^bytes=(\d*)-(\d*)$/.exec(range);
+      if (!match || (!match[1] && !match[2])) {
+        response.writeHead(416, { ...headers, "content-range": `bytes */${fileInfo.size}` });
+        response.end();
+        return;
+      }
+      if (!match[1]) {
+        const suffixLength = Number(match[2]);
+        start = Math.max(fileInfo.size - suffixLength, 0);
+      } else {
+        start = Number(match[1]);
+        if (match[2]) {
+          end = Number(match[2]);
+        }
+      }
+      if (start >= fileInfo.size || end < start) {
+        response.writeHead(416, { ...headers, "content-range": `bytes */${fileInfo.size}` });
+        response.end();
+        return;
+      }
+      end = Math.min(end, fileInfo.size - 1);
+      statusCode = 206;
+      headers["content-range"] = `bytes ${start}-${end}/${fileInfo.size}`;
+    }
+
+    headers["content-length"] = end - start + 1;
+    response.writeHead(statusCode, headers);
+    const videoStream = createReadStream(outputVideo, { start, end });
+    videoStream.on("error", (error) => {
+      console.error("Could not stream the processed video:", error);
+      response.destroy(error);
+    });
+    videoStream.pipe(response);
+  }
+
   const server = http.createServer(async (request, response) => {
     const pathname = new URL(request.url, "http://localhost").pathname;
 
     if (request.method === "GET" && pathname === "/api/status") {
       return sendJson(response, 200, statusSnapshot());
+    }
+
+    if (request.method === "GET" && pathname === "/api/output") {
+      return serveOutputVideo(request, response);
     }
 
     if (request.method === "POST" && pathname === "/api/start") {

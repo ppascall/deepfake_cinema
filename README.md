@@ -170,6 +170,10 @@ authorized models in `models/` and the video at `input/movie.mp4` before startin
 available from `localhost` or another HTTPS origin; browsers generally block camera access from plain
 HTTP on a network address.
 
+The **Show processed video when finished** option controls whether the completed output is displayed in
+the page. It is enabled by default; turn it off to keep the player hidden. Video playback is served from
+the local `output/final_movie.mp4` file and supports seeking.
+
 On Linux, run as your own user so the container can read your files and write the result into `output/`:
 
 ```bash

@@ -36,6 +36,15 @@
         Replace the output file if it already exists
       </label>
 
+      <label class="video-option">
+        <input id="show-video" type="checkbox" checked>
+        Show processed video when finished
+      </label>
+      <section id="output-video-section" class="output-video" aria-label="Processed video" hidden>
+        <h2>Processed video</h2>
+        <video id="output-video" controls preload="metadata"></video>
+      </section>
+
       <button id="start" type="button">Capture face and process</button>
       <p id="status" class="status" role="status" aria-live="polite">Ready</p>
 

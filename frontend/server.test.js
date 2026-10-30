@@ -32,12 +32,14 @@ async function withServer(server, callback) {
 
 test("serves the UI and reports processing lifecycle and logs", async () => {
   const captureDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "deepfake-cinema-"));
+  const outputVideo = path.join(captureDirectory, "final_movie.mp4");
   const image = Buffer.from([0xff, 0xd8, 0x01, 0x02, 0xff, 0xd9]);
   const children = [];
   const calls = [];
   const server = createServer({
     python: "test-python",
     captureDirectory,
+    outputVideo,
     spawnProcess(command, args) {
       calls.push({ command, args });
       const child = new FakeChild();
@@ -52,6 +54,10 @@ test("serves the UI and reports processing lifecycle and logs", async () => {
     const pageText = await page.text();
     assert.match(pageText, /Capture face and process/);
     assert.match(pageText, /Live camera preview/);
+    assert.match(pageText, /Show processed video when finished/);
+
+    const unavailableVideo = await fetch(`${baseUrl}/api/output`);
+    assert.equal(unavailableVideo.status, 404);
 
     const initial = await fetch(`${baseUrl}/api/status`);
     assert.equal((await initial.json()).state, "idle");
@@ -74,7 +80,16 @@ test("serves the UI and reports processing lifecycle and logs", async () => {
     assert.equal(concurrent.status, 409);
 
     children[0].stdout.write("Processing started\n");
+    await fs.writeFile(outputVideo, Buffer.from("sample processed video"));
     children[0].emit("close", 0);
+
+    const video = await fetch(`${baseUrl}/api/output`, {
+      headers: { range: "bytes=0-5" },
+    });
+    assert.equal(video.status, 206);
+    assert.equal(video.headers.get("content-type"), "video/mp4");
+    assert.equal(video.headers.get("content-range"), "bytes 0-5/22");
+    assert.equal(await video.text(), "sample");
 
     const finished = await fetch(`${baseUrl}/api/status`);
     const status = await finished.json();
