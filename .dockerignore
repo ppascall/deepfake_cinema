@@ -1,0 +1,17 @@
+.git
+.venv
+__pycache__
+*.py[cod]
+.pytest_cache
+.mypy_cache
+.ruff_cache
+tests
+scripts
+Instructions_2.md
+
+input/*
+!input/.gitkeep
+models/*
+!models/.gitkeep
+output/*
+!output/.gitkeep

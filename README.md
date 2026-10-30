@@ -156,6 +156,28 @@ few seconds. Frames that fail are left unchanged and reported; 50 consecutive fa
 Inspect the result with a media player or `ffplay output/test_result.mp4`. Check face placement, flicker,
 head turns and audio sync.
 
+## Optional: Docker web launcher
+
+The Docker setup provides a small local web page with a **Start processing** button and a live log. It
+runs the same CPU-only processor with its existing defaults; by default that means the first 5 seconds at
+20 fps. It does not include model weights or media in the image. Put your authorized models in `models/`,
+the video at `input/movie.mp4`, and the consenting person's photo at `input/person.jpg` before starting.
+
+On Linux, run as your own user so the container can read your files and write the result into `output/`:
+
+```bash
+APP_UID="$(id -u)" APP_GID="$(id -g)" docker compose up --build
+```
+
+On other systems, `docker compose up --build` uses UID/GID 1000 by default. When the image is ready, open
+<http://localhost:3000>. The page only listens on your machine, and the input and model folders are mounted
+read-only; generated files are written to `output/`. The output is not replaced unless you select
+**Replace the output file if it already exists**. Stop the service with `Ctrl+C` (or `docker compose down`).
+
+The first build downloads the base image and installs the Python dependencies; model files remain local and
+are never automatically downloaded. Processing itself is offline. The web launcher is for prerecorded
+video processing; interactive camera capture remains a separate command-line utility.
+
 ## Optional: consent-based live face capture
 
 The capture utility is a separate, opt-in tool. It detects faces in a live camera feed and saves a still

@@ -1,0 +1,15 @@
+services:
+  deepfake-cinema:
+    build:
+      context: .
+    user: "${APP_UID:-1000}:${APP_GID:-1000}"
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - ./input:/app/input:ro
+      - ./models:/app/models:ro
+      - ./output:/app/output
+    environment:
+      PYTHONUNBUFFERED: "1"
+      PORT: "3000"
+    init: true

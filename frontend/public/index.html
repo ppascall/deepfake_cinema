@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Deepfake Cinema</title>
+    <link rel="stylesheet" href="/styles.css">
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <main class="panel">
+      <p class="eyebrow">Local video processing</p>
+      <h1>Deepfake Cinema</h1>
+      <p class="intro">
+        Process the mounted default video using your local model files. Processing runs on the CPU
+        and may take a while.
+      </p>
+
+      <section class="files" aria-label="Files used">
+        <p><strong>Video</strong><code>input/movie.mp4</code></p>
+        <p><strong>Source photo</strong><code>input/person.jpg</code></p>
+        <p><strong>Models</strong><code>models/</code></p>
+        <p><strong>Output</strong><code>output/final_movie.mp4</code></p>
+      </section>
+
+      <label class="overwrite">
+        <input id="overwrite" type="checkbox">
+        Replace the output file if it already exists
+      </label>
+
+      <button id="start" type="button">Start processing</button>
+      <p id="status" class="status" role="status" aria-live="polite">Ready</p>
+
+      <details>
+        <summary>Processing log</summary>
+        <pre id="logs" aria-live="polite">No run started.</pre>
+      </details>
+
+      <p class="notice">
+        Use only footage and face photos you have permission to process. Nothing is uploaded.
+      </p>
+    </main>
+  </body>
+</html>
