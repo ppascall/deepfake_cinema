@@ -2,6 +2,9 @@
 
 const assert = require("node:assert/strict");
 const { EventEmitter } = require("node:events");
+const fs = require("node:fs/promises");
+const os = require("node:os");
+const path = require("node:path");
 const { PassThrough } = require("node:stream");
 const test = require("node:test");
 
@@ -28,10 +31,13 @@ async function withServer(server, callback) {
 }
 
 test("serves the UI and reports processing lifecycle and logs", async () => {
+  const captureDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "deepfake-cinema-"));
+  const image = Buffer.from([0xff, 0xd8, 0x01, 0x02, 0xff, 0xd9]);
   const children = [];
   const calls = [];
   const server = createServer({
     python: "test-python",
+    captureDirectory,
     spawnProcess(command, args) {
       calls.push({ command, args });
       const child = new FakeChild();
@@ -43,26 +49,27 @@ test("serves the UI and reports processing lifecycle and logs", async () => {
   await withServer(server, async (baseUrl) => {
     const page = await fetch(baseUrl);
     assert.equal(page.status, 200);
-    assert.match(await page.text(), /Start processing/);
+    const pageText = await page.text();
+    assert.match(pageText, /Capture face and process/);
+    assert.match(pageText, /Live camera preview/);
 
     const initial = await fetch(`${baseUrl}/api/status`);
     assert.equal((await initial.json()).state, "idle");
 
     const started = await fetch(`${baseUrl}/api/start`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ overwrite: false }),
+      headers: { "content-type": "image/jpeg", "x-overwrite": "false" },
+      body: image,
     });
     assert.equal(started.status, 202);
-    assert.deepEqual(calls[0], {
-      command: "test-python",
-      args: ["-m", "src.process_video"],
-    });
+    assert.equal(calls[0].command, "test-python");
+    assert.deepEqual(calls[0].args.slice(0, 3), ["-m", "src.process_video", "--source-face"]);
+    assert.deepEqual(await fs.readFile(calls[0].args[3]), image);
 
     const concurrent = await fetch(`${baseUrl}/api/start`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
-      body: "{}",
+      headers: { "content-type": "image/jpeg", "x-overwrite": "false" },
+      body: image,
     });
     assert.equal(concurrent.status, 409);
 
@@ -73,15 +80,42 @@ test("serves the UI and reports processing lifecycle and logs", async () => {
     const status = await finished.json();
     assert.equal(status.state, "succeeded");
     assert.equal(status.exitCode, 0);
-    assert.deepEqual(status.logs, ["Processing started"]);
+    assert.match(status.logs[0], /^Captured face saved to /);
+    assert.equal(status.logs[1], "Processing started");
 
     const restarted = await fetch(`${baseUrl}/api/start`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ overwrite: true }),
+      headers: { "content-type": "image/jpeg", "x-overwrite": "true" },
+      body: image,
     });
     assert.equal(restarted.status, 202);
-    assert.deepEqual(calls[1].args, ["-m", "src.process_video", "--overwrite"]);
+    assert.deepEqual(calls[1].args.slice(0, 3), ["-m", "src.process_video", "--source-face"]);
+    assert.equal(calls[1].args.at(-1), "--overwrite");
     children[1].emit("close", 2);
+  }).finally(async () => {
+    await fs.rm(captureDirectory, { recursive: true, force: true });
+  });
+});
+
+test("rejects invalid photo content without starting the processor", async () => {
+  const children = [];
+  const server = createServer({
+    spawnProcess() {
+      children.push(true);
+      return new FakeChild();
+    },
+  });
+
+  await withServer(server, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/start`, {
+      method: "POST",
+      headers: { "content-type": "image/jpeg", "x-overwrite": "false" },
+      body: Buffer.from("not a jpeg"),
+    });
+
+    assert.equal(response.status, 400);
+    assert.match((await response.json()).error, /valid JPEG/);
+    assert.equal(children.length, 0);
+    assert.equal((await (await fetch(`${baseUrl}/api/status`)).json()).state, "idle");
   });
 });

@@ -156,12 +156,19 @@ few seconds. Frames that fail are left unchanged and reported; 50 consecutive fa
 Inspect the result with a media player or `ffplay output/test_result.mp4`. Check face placement, flicker,
 head turns and audio sync.
 
-## Optional: Docker web launcher
+## Optional: one-click camera and Docker web launcher
 
-The Docker setup provides a small local web page with a **Start processing** button and a live log. It
-runs the same CPU-only processor with its existing defaults; by default that means the first 5 seconds at
-20 fps. It does not include model weights or media in the image. Put your authorized models in `models/`,
-the video at `input/movie.mp4`, and the consenting person's photo at `input/person.jpg` before starting.
+The Docker setup provides a local web page with a **Capture face and process** button and a live log. On
+click, the browser requests camera permission, shows a preview and a 3-second countdown, then takes one
+still and passes it to the existing CPU-only processor as its source face. The processor uses its normal
+defaults: the first 5 seconds at 20 fps. No video is recorded and the camera image is not sent to an
+external service. It is saved locally in `output/captured_faces/` and stays there for review. The captured
+image is not available in the read-only input mount.
+
+The browser button replaces the need to prepare `input/person.jpg` for this web workflow. Put your
+authorized models in `models/` and the video at `input/movie.mp4` before starting. Camera access is
+available from `localhost` or another HTTPS origin; browsers generally block camera access from plain
+HTTP on a network address.
 
 On Linux, run as your own user so the container can read your files and write the result into `output/`:
 
@@ -171,12 +178,13 @@ APP_UID="$(id -u)" APP_GID="$(id -g)" docker compose up --build
 
 On other systems, `docker compose up --build` uses UID/GID 1000 by default. When the image is ready, open
 <http://localhost:3000>. The page only listens on your machine, and the input and model folders are mounted
-read-only; generated files are written to `output/`. The output is not replaced unless you select
-**Replace the output file if it already exists**. Stop the service with `Ctrl+C` (or `docker compose down`).
+read-only; generated files and the captured face are written to `output/`. The output video is not replaced
+unless you select **Replace the output file if it already exists**. Allow camera access in the browser to
+start the one-click flow. Stop the service with `Ctrl+C` (or `docker compose down`).
 
 The first build downloads the base image and installs the Python dependencies; model files remain local and
-are never automatically downloaded. Processing itself is offline. The web launcher is for prerecorded
-video processing; interactive camera capture remains a separate command-line utility.
+are never automatically downloaded. Processing itself is offline. If you deny camera access, capture
+fails without starting processing. The command-line capture workflow remains available below.
 
 ## Optional: consent-based live face capture
 
@@ -222,8 +230,9 @@ face is correct. In either mode, the image is cropped with a small margin and sa
 Escape to quit. Use `--output-dir` to choose another local directory and `--prefix` to change the filename
 prefix. `--det-model` and `--det-size` configure the detector.
 
-Inspect the saved JPEG before using it. Nothing passes it to the swapper automatically; if appropriate and
-authorized, select it explicitly in a later run:
+In manual capture mode, inspect the saved JPEG before using it; it is not passed to the swapper unless you
+select it explicitly in a later run. The separate `--capture-and-process` option intentionally captures
+and starts processing in one command:
 
 ```bash
 python -m src.process_video \

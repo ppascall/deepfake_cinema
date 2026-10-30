@@ -12,13 +12,21 @@
       <p class="eyebrow">Local video processing</p>
       <h1>Deepfake Cinema</h1>
       <p class="intro">
-        Process the mounted default video using your local model files. Processing runs on the CPU
-        and may take a while.
+        Start your camera, capture a face, and process the default video with your local model files.
+        Processing runs on the CPU and may take a while.
       </p>
+
+      <section class="capture" aria-label="Camera capture">
+        <video id="preview" autoplay playsinline muted aria-label="Live camera preview"></video>
+        <p id="camera-status" class="camera-status" role="status" aria-live="polite">
+          Camera is off. Select the button to start.
+        </p>
+        <button id="cancel" class="cancel" type="button" hidden>Cancel capture</button>
+      </section>
 
       <section class="files" aria-label="Files used">
         <p><strong>Video</strong><code>input/movie.mp4</code></p>
-        <p><strong>Source photo</strong><code>input/person.jpg</code></p>
+        <p><strong>Captured photo</strong><code>output/captured_faces/</code></p>
         <p><strong>Models</strong><code>models/</code></p>
         <p><strong>Output</strong><code>output/final_movie.mp4</code></p>
       </section>
@@ -28,7 +36,7 @@
         Replace the output file if it already exists
       </label>
 
-      <button id="start" type="button">Start processing</button>
+      <button id="start" type="button">Capture face and process</button>
       <p id="status" class="status" role="status" aria-live="polite">Ready</p>
 
       <details>
@@ -37,7 +45,9 @@
       </details>
 
       <p class="notice">
-        Use only footage and face photos you have permission to process. Nothing is uploaded.
+        Starting capture shows a live preview and a 3-second countdown. Use only footage and face
+        photos you have permission to process. The camera snapshot stays on this computer and is
+        never sent to an external service.
       </p>
     </main>
   </body>
