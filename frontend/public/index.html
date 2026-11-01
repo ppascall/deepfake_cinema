@@ -12,40 +12,87 @@
       <p class="eyebrow">Local video processing</p>
       <h1>Deepfake Cinema</h1>
       <p class="intro">
-        Start your camera, capture a face, and process the default video with your local model files.
-        Processing runs on the CPU and may take a while.
+        Set the face source, film, and scene. Start opens the film in a separate tab while the selected
+        scene is processed and stitched into a complete copy.
       </p>
 
-      <section class="capture" aria-label="Camera capture">
-        <video id="preview" autoplay playsinline muted aria-label="Live camera preview"></video>
-        <p id="camera-status" class="camera-status" role="status" aria-live="polite">
-          Camera is off. Select the button to start.
-        </p>
-        <button id="cancel" class="cancel" type="button" hidden>Cancel capture</button>
+      <section class="setup-step" aria-labelledby="face-heading">
+        <p class="step-number">01</p>
+        <div class="step-content">
+          <h2 id="face-heading">Face source</h2>
+          <fieldset class="mode-options">
+            <legend>Choose a source</legend>
+            <label><input type="radio" name="face-mode" value="existing" checked> Existing photo</label>
+            <label><input type="radio" name="face-mode" value="live"> Live camera</label>
+          </fieldset>
+          <div id="existing-face-panel">
+            <label class="field" for="source-face-select">
+              <span>Saved face</span>
+              <select id="source-face-select"></select>
+            </label>
+          </div>
+          <div id="live-face-panel" hidden>
+            <video id="preview" autoplay playsinline muted aria-label="Live camera preview" hidden></video>
+            <button id="capture-face" class="secondary" type="button">Capture live photo</button>
+            <button id="cancel" class="cancel" type="button" hidden>Cancel capture</button>
+            <p id="camera-status" class="camera-status" role="status" aria-live="polite">Camera is off.</p>
+          </div>
+          <label class="consent">
+            <input id="participant-consent" type="checkbox">
+            I agree to use this face image to alter the selected scene. Live capture takes one photo.
+            The image and finished video are saved locally.
+          </label>
+        </div>
       </section>
 
-      <section class="files" aria-label="Files used">
-        <p><strong>Video</strong><code>input/movie.mp4</code></p>
-        <p><strong>Captured photo</strong><code>output/captured_faces/</code></p>
-        <p><strong>Models</strong><code>models/</code></p>
-        <p><strong>Output</strong><code>output/final_movie.mp4</code></p>
+      <section class="setup-step" aria-labelledby="film-heading">
+        <p class="step-number">02</p>
+        <div class="step-content">
+          <h2 id="film-heading">Film</h2>
+          <label class="field" for="video-select">
+            <span>Video to play</span>
+            <select id="video-select"></select>
+          </label>
+          <label class="field upload" for="video-upload">
+            <span>Add a video</span>
+            <input id="video-upload" type="file" accept="video/mp4,video/quicktime,video/webm,video/x-matroska">
+          </label>
+          <button id="upload-video" class="secondary" type="button">Add selected video</button>
+        </div>
       </section>
 
-      <label class="overwrite">
-        <input id="overwrite" type="checkbox">
-        Replace the output file if it already exists
-      </label>
-
-      <label class="video-option">
-        <input id="show-video" type="checkbox" checked>
-        Show processed video when finished
-      </label>
-      <section id="output-video-section" class="output-video" aria-label="Processed video" hidden>
-        <h2>Processed video</h2>
-        <video id="output-video" controls preload="metadata"></video>
+      <section class="setup-step" aria-labelledby="range-heading">
+        <p class="step-number">03</p>
+        <div class="step-content">
+          <h2 id="range-heading">Scene range</h2>
+          <div class="range-grid">
+            <label class="field" for="clip-start">
+              <span>Start (seconds)</span>
+              <input id="clip-start" type="number" min="0" step="0.1" value="5">
+            </label>
+            <label class="field" for="clip-end">
+              <span>End (seconds)</span>
+              <input id="clip-end" type="number" min="0.1" step="0.1" value="10">
+            </label>
+          </div>
+        </div>
       </section>
 
-      <button id="start" type="button">Capture face and process</button>
+      <section class="setup-step" aria-labelledby="options-heading">
+        <p class="step-number">04</p>
+        <div class="step-content">
+          <h2 id="options-heading">Options</h2>
+          <label class="video-option">
+            <input id="show-video" type="checkbox" checked>
+            Play the stitched film when it is ready
+          </label>
+        </div>
+      </section>
+
+      <section class="start-section" aria-label="Start experience">
+        <button id="start" type="button">Start experience</button>
+        <p id="status" class="status" role="status" aria-live="polite">Ready to configure.</p>
+      </section>
       <p id="status" class="status" role="status" aria-live="polite">Ready</p>
 
       <details>
@@ -54,9 +101,8 @@
       </details>
 
       <p class="notice">
-        Starting capture shows a live preview and a 3-second countdown. Use only footage and face
-        photos you have permission to process. The camera snapshot stays on this computer and is
-        never sent to an external service.
+        The camera preview and countdown remain visible while the photo is taken. Cancel before the
+        photo is captured to stop. Use only footage and face photos you have permission to process.
       </p>
     </main>
   </body>

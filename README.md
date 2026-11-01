@@ -156,23 +156,27 @@ few seconds. Frames that fail are left unchanged and reported; 50 consecutive fa
 Inspect the result with a media player or `ffplay output/test_result.mp4`. Check face placement, flicker,
 head turns and audio sync.
 
-## Optional: one-click camera and Docker web launcher
+## Optional: consent-based installation web launcher
 
-The Docker setup provides a local web page with a **Capture face and process** button and a live log. On
-click, the browser requests camera permission, shows a preview and a 3-second countdown, then takes one
-still and passes it to the existing CPU-only processor as its source face. The processor uses its normal
-defaults: the first 5 seconds at 20 fps. No video is recorded and the camera image is not sent to an
-external service. It is saved locally in `output/captured_faces/` and stays there for review. The captured
-image is not available in the read-only input mount.
+The Docker web page is organized in order: choose an existing saved photo or **Live camera**, select the
+film, set the scene range, then set playback options. Existing photos include `input/person.jpg` and prior
+camera captures. In live mode, **Capture live photo** requests camera access, shows a preview and a
+three-second countdown, and saves one still locally in `output/captured_faces/`. After the participant
+affirms consent, **Start experience** opens the selected film in a separate tab and starts background
+processing and stitching.
 
-The browser button replaces the need to prepare `input/person.jpg` for this web workflow. Put your
-authorized models in `models/` and the video at `input/movie.mp4` before starting. Camera access is
-available from `localhost` or another HTTPS origin; browsers generally block camera access from plain
-HTTP on a network address.
+FFmpeg replaces the selected interval in the full-length film, retaining the original footage before and
+after it and the original audio. Once the source playback ends and rendering is complete, the finished film
+starts from the beginning automatically (when that option is enabled).
 
-The **Show processed video when finished** option controls whether the completed output is displayed in
-the page. It is enabled by default; turn it off to keep the player hidden. Video playback is served from
-the local `output/final_movie.mp4` file and supports seeking.
+This is not frame-by-frame live replacement: if CPU rendering is still running when the first playback
+ends, the page waits and then replays the completed version. The photo is sent only to this local server;
+no external service is involved. Camera access is available from `localhost` or another HTTPS origin.
+The server also requires a consent marker on capture and processing requests.
+
+Output videos use timestamped filenames in `output/`, and the page serves the newest MP4. **Process
+selected range** remains available for an already-saved face, but the one-button installation flow always
+captures a fresh still.
 
 On Linux, run as your own user so the container can read your files and write the result into `output/`:
 
@@ -182,9 +186,8 @@ APP_UID="$(id -u)" APP_GID="$(id -g)" docker compose up --build
 
 On other systems, `docker compose up --build` uses UID/GID 1000 by default. When the image is ready, open
 <http://localhost:3000>. The page only listens on your machine, and the input and model folders are mounted
-read-only; generated files and the captured face are written to `output/`. The output video is not replaced
-unless you select **Replace the output file if it already exists**. Allow camera access in the browser to
-start the one-click flow. Stop the service with `Ctrl+C` (or `docker compose down`).
+read-only; generated files and the captured face are written to `output/`. Allow camera access in the
+browser to start the experience. Stop the service with `Ctrl+C` (or `docker compose down`).
 
 The first build downloads the base image and installs the Python dependencies; model files remain local and
 are never automatically downloaded. Processing itself is offline. If you deny camera access, capture

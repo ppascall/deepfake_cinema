@@ -1,0 +1,5 @@
+## Goal
+I want to be able to adjust what part of the video to have deepfaked from out of the UI. Then run the program and have the video stitched back in live while its being played back.
+
+## Requirements
+I want to be able to have aa start and end input in the frontend for the video I wish to deepfake, once that is selected I want to be able to play the video in like on another webpage, maybe something like localhost:3000/video and have the video being played whilst the deepfake on the certain frames are running. I also want to be be able to add videos to an input folder to run this program from the UI. After the deepfake has been run I want it to stitch the deepfaked frames back in to the playing video so you wont even notice that it has been changed. I was thinking maybe through ffmpeg or something.

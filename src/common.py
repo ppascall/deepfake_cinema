@@ -6,13 +6,14 @@ import os
 import shutil
 import subprocess
 import sys
+from datetime import datetime
 from dataclasses import dataclass
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_VIDEO = PROJECT_ROOT / "input" / "movie.mp4"
 DEFAULT_SOURCE_FACE = PROJECT_ROOT / "input" / "person.jpg"
-DEFAULT_OUTPUT = PROJECT_ROOT / "output" / "final_movie.mp4"
+DEFAULT_OUTPUT = PROJECT_ROOT / "output" / f"final_movie_{datetime.now().strftime('%Y%m%d_%H%M%S')}.mp4"
 MODELS_DIR = PROJECT_ROOT / "models"
 DEFAULT_SWAPPER = MODELS_DIR / "inswapper_128.onnx"
 DEFAULT_DETECTOR = MODELS_DIR / "buffalo_l" / "det_10g.onnx"
