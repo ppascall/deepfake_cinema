@@ -20,7 +20,7 @@ RUN apt-get update \
         python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt ./
+COPY requirements.txt requirements-gpu.txt ./
 RUN python -m pip install --no-cache-dir -r requirements.txt
 
 COPY src ./src
