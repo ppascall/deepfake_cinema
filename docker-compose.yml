@@ -6,10 +6,16 @@ services:
     ports:
       - "127.0.0.1:3000:3000"
     volumes:
-      - ./input:/app/input:ro
+      - ./input:/app/input
       - ./models:/app/models:ro
       - ./output:/app/output
+      - ./.secrets:/runcrate-ssh:ro
     environment:
       PYTHONUNBUFFERED: "1"
       PORT: "3000"
+      RUNCRATE_API_KEY: "${RUNCRATE_API_KEY:-}"
+      RUNCRATE_GPU_TYPE: "${RUNCRATE_GPU_TYPE:-RTX4090}"
+      RUNCRATE_SSH_KEY_ID: "${RUNCRATE_SSH_KEY_ID:-}"
+      RUNCRATE_SSH_PRIVATE_KEY_PATH: "${RUNCRATE_SSH_PRIVATE_KEY_PATH:-/runcrate-ssh/id_ed25519}"
+      RUNCRATE_MAX_RUNTIME_MINUTES: "${RUNCRATE_MAX_RUNTIME_MINUTES:-240}"
     init: true

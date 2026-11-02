@@ -15,8 +15,8 @@ try:
 except ImportError:  # pragma: no cover - stdlib fallback
     ctypes = None
 
-from .common import (DEFAULT_DETECTOR, DEFAULT_RECOGNIZER, DEFAULT_SWAPPER, CPU_PROVIDERS,
-                     ToolError, probe_video, show)
+from .common import (DEFAULT_DETECTOR, DEFAULT_RECOGNIZER, DEFAULT_SWAPPER, ToolError,
+                     inference_providers, probe_video, show)
 
 OK, WARN, FAIL = "OK", "WARN", "FAIL"
 
@@ -63,19 +63,23 @@ def _check_binary(name: str) -> Check:
     return Check(OK, f"{name} on PATH", first)
 
 
-def _check_ort_cpu() -> Check:
+def _check_ort_provider(device: str) -> Check:
+    provider = "CUDAExecutionProvider" if device == "cuda" else "CPUExecutionProvider"
+    name = f"ONNX Runtime {device.upper()} provider"
     try:
         import onnxruntime as ort
     except Exception:
-        return Check(FAIL, "ONNX Runtime CPU provider", "onnxruntime not importable",
-                     "python -m pip install onnxruntime")
+        package = "onnxruntime-gpu" if device == "cuda" else "onnxruntime"
+        return Check(FAIL, name, "onnxruntime not importable", f"Install the selected runtime: pip install {package}")
     providers = ort.get_available_providers()
-    if "CPUExecutionProvider" not in providers:
-        return Check(FAIL, "ONNX Runtime CPU provider", f"available: {providers}",
-                     "Reinstall the CPU build: python -m pip install --force-reinstall onnxruntime")
-    extra = [p for p in providers if p != "CPUExecutionProvider"]
-    note = f"CPUExecutionProvider (other providers present but not used: {extra})" if extra else "CPUExecutionProvider"
-    return Check(OK, "ONNX Runtime CPU provider", note)
+    if provider not in providers:
+        hint = (
+            "Install onnxruntime-gpu and the matching CUDA/cuDNN runtime, then verify NVIDIA container/runtime access."
+            if device == "cuda" else
+            "Reinstall the CPU runtime: python -m pip install --force-reinstall onnxruntime"
+        )
+        return Check(FAIL, name, f"available: {providers}", hint)
+    return Check(OK, name, f"{provider}; available providers: {providers}")
 
 
 def _read_windows_cpu_name() -> str:
@@ -160,17 +164,20 @@ def _check_model_file(path: Path, label: str) -> Check:
     return Check(OK, f"Model file: {label}", f"{show(path)} ({path.stat().st_size / 1e6:.0f} MB)")
 
 
-def _check_model_loads(swapper: Path) -> Check:
+def _check_model_loads(swapper: Path, device: str) -> Check:
     """Open the swapper with ONNX Runtime and verify its input signature."""
     try:
         import onnxruntime as ort
-        sess = ort.InferenceSession(str(swapper), providers=CPU_PROVIDERS)
+        sess = ort.InferenceSession(str(swapper), providers=inference_providers(device))
         ins = sess.get_inputs()
         shapes = [i.shape for i in ins]
+        if device == "cuda" and "CUDAExecutionProvider" not in sess.get_providers():
+            return Check(FAIL, "Swapper model signature", f"session providers: {sess.get_providers()}",
+                         "ONNX Runtime did not activate CUDA for this model.")
         if len(ins) != 2 or shapes[0][1:] != [3, 128, 128] or shapes[1][-1] != 512:
             return Check(FAIL, "Swapper model signature", f"inputs: {shapes}",
                          "Expected an InSwapper-style model: image [1,3,128,128] + embedding [1,512].")
-        return Check(OK, "Swapper model signature", f"inputs {shapes}, CPU session created")
+        return Check(OK, "Swapper model signature", f"inputs {shapes}, {device.upper()} session created")
     except Exception as exc:
         return Check(FAIL, "Swapper model signature", f"could not open model: {exc}",
                      "The file may be corrupt or not a compatible ONNX model.")
@@ -193,18 +200,19 @@ def _check_output_dir(output_dir: Path) -> list[Check]:
 
 def run_checks(video: Path | None = None, source_face: Path | None = None,
                swapper: Path = DEFAULT_SWAPPER, detector: Path = DEFAULT_DETECTOR,
-               recognizer: Path = DEFAULT_RECOGNIZER, output_dir: Path | None = None) -> list[Check]:
+               recognizer: Path = DEFAULT_RECOGNIZER, output_dir: Path | None = None,
+               device: str = "cpu") -> list[Check]:
     checks = [_check_python()]
     checks += [_check_import("numpy"), _check_import("cv2", "opencv-python"),
                _check_import("onnxruntime"), _check_import("insightface")]
-    checks += [_check_binary("ffmpeg"), _check_binary("ffprobe"), _check_ort_cpu()]
+    checks += [_check_binary("ffmpeg"), _check_binary("ffprobe"), _check_ort_provider(device)]
     checks += _check_machine()
 
     models = [(swapper, "swapper"), (detector, "face detector"), (recognizer, "face recognizer")]
     model_checks = [_check_model_file(p, label) for p, label in models]
     checks += model_checks
     if model_checks[0].status == OK:
-        checks.append(_check_model_loads(swapper))
+        checks.append(_check_model_loads(swapper, device))
 
     if output_dir is not None:
         checks += _check_output_dir(output_dir)
@@ -223,11 +231,12 @@ def run_checks(video: Path | None = None, source_face: Path | None = None,
 
     if source_face is not None:
         checks.append(_check_source_face(source_face, detector, recognizer,
-                                         all(c.status == OK for c in model_checks[1:])))
+                                         all(c.status == OK for c in model_checks[1:]), device))
     return checks
 
 
-def _check_source_face(photo: Path, detector: Path, recognizer: Path, models_ok: bool) -> Check:
+def _check_source_face(photo: Path, detector: Path, recognizer: Path, models_ok: bool,
+                       device: str = "cpu") -> Check:
     if not photo.exists():
         return Check(FAIL, "Source face photo", f"not found: {show(photo)}",
                      "Put the photo at input/person.jpg or pass --source-face.")
@@ -241,7 +250,7 @@ def _check_source_face(photo: Path, detector: Path, recognizer: Path, models_ok:
         return Check(WARN, "Source face photo", f"{show(photo)} readable; face detection skipped (models missing)")
     try:
         from .detect_faces import FaceAnalyzer
-        faces = FaceAnalyzer(detector, recognizer).detect(cv2.imread(str(photo)))
+        faces = FaceAnalyzer(detector, recognizer, device=device).detect(cv2.imread(str(photo)))
     except ToolError as exc:
         return Check(FAIL, "Source face photo", str(exc))
     if not faces:

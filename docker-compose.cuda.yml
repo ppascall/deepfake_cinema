@@ -1,0 +1,9 @@
+services:
+  deepfake-cinema:
+    build:
+      context: .
+      dockerfile: Dockerfile.cuda
+    gpus: all
+    environment:
+      DEEPFAKE_DEVICE: cuda
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility

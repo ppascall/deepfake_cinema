@@ -29,6 +29,12 @@ function createServer({
   spawnFFmpeg = spawn,
   probeVideoDuration = getVideoDuration,
   python = process.env.PYTHON || "python3",
+  device = process.env.DEEPFAKE_DEVICE || "cpu",
+  runcrateApiKey = process.env.RUNCRATE_API_KEY || "",
+  runcrateGpuType = process.env.RUNCRATE_GPU_TYPE || "RTX4090",
+  runcrateSshKeyId = process.env.RUNCRATE_SSH_KEY_ID || "",
+  runcrateSshPrivateKeyPath = process.env.RUNCRATE_SSH_PRIVATE_KEY_PATH || "",
+  runcrateMaxRuntimeMinutes = process.env.RUNCRATE_MAX_RUNTIME_MINUTES || "240",
   captureDirectory = DEFAULT_CAPTURE_DIRECTORY,
   inputDirectory = DEFAULT_INPUT_DIRECTORY,
   outputVideo = DEFAULT_OUTPUT_VIDEO,
@@ -612,7 +618,20 @@ function createServer({
           const processorOutput = stitchFullVideo
             ? path.join(path.dirname(currentOutputVideo), `.${path.basename(currentOutputVideo, ".mp4")}.segment.mp4`)
             : currentOutputVideo;
-          const args = ["-m", "src.process_video", "--source-face", sourceFacePath, "--video", selectedVideo];
+          const remoteRuncrate = Boolean(runcrateApiKey.trim());
+          const args = remoteRuncrate
+            ? ["-m", "src.runcrate_worker", "--source-face", sourceFacePath, "--video", selectedVideo]
+            : ["-m", "src.process_video", "--source-face", sourceFacePath, "--video", selectedVideo];
+          if (remoteRuncrate) {
+            args.push(
+              "--gpu-type", runcrateGpuType,
+              "--ssh-key-id", runcrateSshKeyId,
+              "--ssh-private-key", runcrateSshPrivateKeyPath,
+              "--max-runtime-minutes", runcrateMaxRuntimeMinutes,
+            );
+          } else {
+            args.push("--device", device);
+          }
           args.push("--output", processorOutput);
           if (overwrite) {
             args.push("--overwrite");
@@ -620,9 +639,19 @@ function createServer({
           if (clipDuration !== null && clipDuration > 0) {
             args.push("--max-seconds", String(clipDuration));
           }
+          const childEnvironment = { ...process.env, PYTHONUNBUFFERED: "1" };
+          if (remoteRuncrate) {
+            Object.assign(childEnvironment, {
+              RUNCRATE_API_KEY: runcrateApiKey,
+              RUNCRATE_GPU_TYPE: runcrateGpuType,
+              RUNCRATE_SSH_KEY_ID: runcrateSshKeyId,
+              RUNCRATE_SSH_PRIVATE_KEY_PATH: runcrateSshPrivateKeyPath,
+              RUNCRATE_MAX_RUNTIME_MINUTES: runcrateMaxRuntimeMinutes,
+            });
+          }
           const child = spawnProcess(python, args, {
             cwd: PROJECT_ROOT,
-            env: { ...process.env, PYTHONUNBUFFERED: "1" },
+            env: childEnvironment,
             stdio: ["ignore", "pipe", "pipe"],
           });
           run.child = child;

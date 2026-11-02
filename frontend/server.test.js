@@ -155,6 +155,7 @@ test("lists videos and accepts start/end settings for a selected clip", async ()
     inputDirectory,
     captureDirectory,
     outputVideo,
+    device: "cuda",
     spawnProcess(command, args) {
       calls.push({ command, args });
       const child = new FakeChild();
@@ -182,6 +183,7 @@ test("lists videos and accepts start/end settings for a selected clip", async ()
     });
     assert.equal(started.status, 202);
     assert.equal(calls[0].args.includes("--video"), true);
+    assert.equal(calls[0].args[calls[0].args.indexOf("--device") + 1], "cuda");
     assert.equal(calls[0].args.includes("--max-seconds"), true);
     assert.equal(calls[0].args[calls[0].args.indexOf("--max-seconds") + 1], "7.5");
     assert.equal(calls[0].args[calls[0].args.indexOf("--video") + 1], path.join(inputDirectory, "alpha.mp4"));
@@ -189,6 +191,50 @@ test("lists videos and accepts start/end settings for a selected clip", async ()
     await fs.writeFile(outputVideo, Buffer.from("sample processed video"));
     const output = await fetch(`${baseUrl}/api/output`);
     assert.equal(output.status, 200);
+  }).finally(async () => {
+    await fs.rm(inputDirectory, { recursive: true, force: true });
+    await fs.rm(captureDirectory, { recursive: true, force: true });
+  });
+});
+
+test("dispatches processing to Runcrate when an API key is configured", async () => {
+  const inputDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "deepfake-runcrate-input-"));
+  const captureDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "deepfake-runcrate-output-"));
+  const sourceFace = path.join(captureDirectory, "face_manual.jpg");
+  await fs.writeFile(path.join(inputDirectory, "movie.mp4"), Buffer.from("video"));
+  await fs.writeFile(sourceFace, Buffer.from("face"));
+  const calls = [];
+  const server = createServer({
+    inputDirectory,
+    captureDirectory,
+    runcrateApiKey: "rc_live_test",
+    runcrateGpuType: "RTX4090",
+    runcrateSshKeyId: "key_test",
+    runcrateSshPrivateKeyPath: "/runcrate-ssh/id_ed25519",
+    runcrateMaxRuntimeMinutes: "90",
+    spawnProcess(command, args, options) {
+      calls.push({ command, args, options });
+      return new FakeChild();
+    },
+  });
+
+  await withServer(server, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/start`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        video: "movie.mp4",
+        sourceFace: "capture:face_manual.jpg",
+        participantConsent: true,
+      }),
+    });
+    assert.equal(response.status, 202);
+    assert.deepEqual(calls[0].args.slice(0, 3), ["-m", "src.runcrate_worker", "--source-face"]);
+    assert.equal(calls[0].args.includes("--device"), false);
+    assert.equal(calls[0].args[calls[0].args.indexOf("--gpu-type") + 1], "RTX4090");
+    assert.equal(calls[0].args[calls[0].args.indexOf("--ssh-key-id") + 1], "key_test");
+    assert.equal(calls[0].options.env.RUNCRATE_API_KEY, "rc_live_test");
+    assert.equal(calls[0].args.includes("rc_live_test"), false);
   }).finally(async () => {
     await fs.rm(inputDirectory, { recursive: true, force: true });
     await fs.rm(captureDirectory, { recursive: true, force: true });

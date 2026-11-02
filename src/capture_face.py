@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .common import (DEFAULT_DETECTOR, DEFAULT_OUTPUT, DEFAULT_RECOGNIZER, DEFAULT_SWAPPER,
-                     DEFAULT_VIDEO, PROJECT_ROOT, ToolError, show)
+                     DEFAULT_VIDEO, PROJECT_ROOT, ToolError, inference_providers, show)
 from .detect_faces import FaceDetector, import_runtime, largest_face
 
 DEFAULT_CAPTURE_DIR = PROJECT_ROOT / "input" / "captured_faces"
@@ -36,6 +36,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Authorized SCRFD detector ONNX model.")
     ap.add_argument("--det-size", type=int, default=640,
                     help="Detector input size in pixels; multiple of 32 and at least 160.")
+    ap.add_argument("--device", choices=["cpu", "cuda"], default="cpu",
+                    help="Inference device; CUDA requires the GPU ONNX Runtime build.")
     ap.add_argument("--capture-and-process", action="store_true",
                     help="After a visible countdown, capture a face and immediately process the default video.")
     ap.add_argument("--capture-delay", type=float, default=5.0,
@@ -232,11 +234,13 @@ def process(args) -> int:
     print(CONSENT_NOTICE)
     if args.dry_run:
         from .detect_faces import require_model_file
+        inference_providers(args.device)
         require_model_file(args.det_model, "face detector")
-        print("Dry run: dependencies and detector file are available; no camera was opened and no image was saved.")
+        print(f"Dry run: {args.device.upper()} inference provider and detector file are available; "
+              "no camera was opened and no image was saved.")
         return 0
 
-    detector = FaceDetector(args.det_model, det_size=args.det_size)
+    detector = FaceDetector(args.det_model, det_size=args.det_size, device=args.device)
     if args.capture_and_process:
         print(f"Automatic capture starts after {args.capture_delay:g} seconds; press Q or Escape to cancel.")
     else:
@@ -263,6 +267,7 @@ def process(args) -> int:
         "--det-model", str(args.det_model),
         "--rec-model", str(args.rec_model),
         "--det-size", str(args.det_size),
+        "--device", args.device,
         "--output", str(args.output),
         "--max-seconds", str(args.max_seconds),
         "--fps", str(args.fps),

@@ -2,6 +2,8 @@
 __pycache__/
 *.pyc
 .tmp_*/
+.env
+.secrets/
 
 # Private media and model weights stay local
 input/*

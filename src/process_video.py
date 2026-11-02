@@ -1,7 +1,7 @@
-"""Offline, CPU-only face swap for a prerecorded video.
+"""Face swap for a prerecorded video using CPU or CUDA inference.
 
     python -m src.process_video --video input/test_clip.mp4 --source-face input/person.jpg \\
-        --model models/inswapper_128.onnx --output output/test_result.mp4 --device cpu
+        --model models/inswapper_128.onnx --output output/test_result.mp4 --device cuda
 
 Pipeline: OpenCV reads frames -> largest face per frame is swapped -> frames are piped to
 FFmpeg (silent temp video) -> original audio is muxed back -> final MP4.
@@ -28,7 +28,7 @@ MAX_CONSECUTIVE_ERRORS = 50
 
 
 def build_parser() -> argparse.ArgumentParser:
-    ap = argparse.ArgumentParser(description="Swap one face in a video (offline, CPU).",
+    ap = argparse.ArgumentParser(description="Swap one face in a video (offline, CPU or CUDA inference).",
                                  formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     ap.add_argument("--video", type=Path, default=DEFAULT_VIDEO, help="Input video (never modified).")
     ap.add_argument("--source-face", type=Path, default=DEFAULT_SOURCE_FACE,
@@ -37,7 +37,8 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--det-model", type=Path, default=DEFAULT_DETECTOR, help="Face detector ONNX model.")
     ap.add_argument("--rec-model", type=Path, default=DEFAULT_RECOGNIZER, help="Face recognition ONNX model.")
     ap.add_argument("--output", type=Path, default=DEFAULT_OUTPUT, help="Output .mp4 path.")
-    ap.add_argument("--device", choices=["cpu"], default="cpu", help="Only CPU inference is supported.")
+    ap.add_argument("--device", choices=["cpu", "cuda"], default="cpu",
+                    help="Inference device; CUDA requires the GPU ONNX Runtime build.")
     ap.add_argument("--max-seconds", type=float, default=5.0,
                     help="Process only the first N seconds (0 = whole video).")
     ap.add_argument("--fps", type=float, default=20.0,
@@ -127,7 +128,8 @@ def process(args) -> int:
     if args.dry_run:
         from .environment import print_report, run_checks
         out_dir = args.output.expanduser().resolve().parent
-        checks = run_checks(args.video, args.source_face, args.model, args.det_model, args.rec_model, out_dir)
+        checks = run_checks(args.video, args.source_face, args.model, args.det_model, args.rec_model,
+                    out_dir, device=args.device)
         ready = print_report(checks)
         out_fps, frames_planned, _ = plan_frames(info, args)
         out_w, out_h = target_size(info.width, info.height, args.scale_height)
@@ -142,8 +144,8 @@ def process(args) -> int:
     output.parent.mkdir(parents=True, exist_ok=True)
 
     print("Reminder: only process footage and face photos you have permission to use.")
-    analyzer = FaceAnalyzer(args.det_model, args.rec_model, det_size=args.det_size)
-    swapper = load_onnx_model(args.model, "face swapper")
+    analyzer = FaceAnalyzer(args.det_model, args.rec_model, det_size=args.det_size, device=args.device)
+    swapper = load_onnx_model(args.model, "face swapper", device=args.device)
     if type(swapper).__name__ != "INSwapper":
         raise ToolError(
             f"{show(args.model)} is not an InSwapper-style model (got {type(swapper).__name__}). "

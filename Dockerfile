@@ -16,6 +16,7 @@ RUN apt-get update \
         libglib2.0-0 \
         libgomp1 \
         nodejs \
+        openssh-client \
         python3-dev \
     && rm -rf /var/lib/apt/lists/*
 

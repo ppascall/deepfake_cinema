@@ -1,4 +1,4 @@
-"""Face detection / embedding (InsightFace models via ONNX Runtime, CPU only).
+"""Face detection / embedding (InsightFace models via ONNX Runtime, CPU or CUDA).
 
 Run as a script to see which face would be picked in a photo or a video frame:
 
@@ -13,8 +13,8 @@ import io
 import sys
 from pathlib import Path
 
-from .common import (CPU_PROVIDERS, DEFAULT_DETECTOR, DEFAULT_RECOGNIZER, ToolError,
-                     resolve_output_path, show)
+from .common import (DEFAULT_DETECTOR, DEFAULT_RECOGNIZER, ToolError, inference_context_id,
+                     inference_providers, resolve_output_path, show)
 
 MODEL_HELP = (
     "See README.md, section 'Models and licensing', for where to obtain authorized weights "
@@ -51,14 +51,14 @@ def require_model_file(path: Path, what: str) -> None:
         raise ToolError(f"{what} model file looks invalid (not a file or too small): {show(path)}\n{MODEL_HELP}")
 
 
-def load_onnx_model(path: Path, what: str):
-    """Load an InsightFace-compatible ONNX model on the CPU provider only."""
+def load_onnx_model(path: Path, what: str, device: str = "cpu"):
+    """Load an InsightFace-compatible ONNX model on the selected execution provider."""
     import_runtime()
     require_model_file(path, what)
     from insightface.model_zoo import get_model
     try:
         with contextlib.redirect_stdout(io.StringIO()):
-            model = get_model(str(path), providers=CPU_PROVIDERS)
+            model = get_model(str(path), providers=inference_providers(device))
     except Exception as exc:
         raise ToolError(
             f"Could not load {what} model {show(path)}: {exc}\n"
@@ -73,11 +73,11 @@ class FaceDetector:
     """SCRFD detector that returns face boxes and landmarks without recognition."""
 
     def __init__(self, detector_path: Path = DEFAULT_DETECTOR,
-                 det_size: int = 640, det_thresh: float = 0.5):
-        self.det = load_onnx_model(detector_path, "face detector")
+                 det_size: int = 640, det_thresh: float = 0.5, device: str = "cpu"):
+        self.det = load_onnx_model(detector_path, "face detector", device=device)
         if not hasattr(self.det, "detect"):
             raise ToolError(f"{show(detector_path)} is not a face-detection model (expected SCRFD det_10g.onnx).")
-        self.det.prepare(-1, input_size=(det_size, det_size), det_thresh=det_thresh)
+        self.det.prepare(inference_context_id(device), input_size=(det_size, det_size), det_thresh=det_thresh)
 
     def detect(self, img):
         """Return faces (InsightFace Face objects with bbox, kps, det_score)."""
@@ -96,12 +96,12 @@ class FaceAnalyzer(FaceDetector):
 
     def __init__(self, detector_path: Path = DEFAULT_DETECTOR,
                  recognizer_path: Path = DEFAULT_RECOGNIZER,
-                 det_size: int = 640, det_thresh: float = 0.5):
-        super().__init__(detector_path, det_size=det_size, det_thresh=det_thresh)
-        self.rec = load_onnx_model(recognizer_path, "face recognizer")
+                 det_size: int = 640, det_thresh: float = 0.5, device: str = "cpu"):
+        super().__init__(detector_path, det_size=det_size, det_thresh=det_thresh, device=device)
+        self.rec = load_onnx_model(recognizer_path, "face recognizer", device=device)
         if not hasattr(self.rec, "get_feat"):
             raise ToolError(f"{show(recognizer_path)} is not a face-recognition model (expected ArcFace w600k_r50.onnx).")
-        self.rec.prepare(-1)
+        self.rec.prepare(inference_context_id(device))
 
     def embed(self, img, face):
         self.rec.get(img, face)
@@ -162,12 +162,14 @@ def main(argv=None) -> int:
     ap.add_argument("--overwrite", action="store_true")
     ap.add_argument("--det-model", type=Path, default=DEFAULT_DETECTOR)
     ap.add_argument("--rec-model", type=Path, default=DEFAULT_RECOGNIZER)
+    ap.add_argument("--device", choices=["cpu", "cuda"], default="cpu",
+                    help="Inference device; CUDA requires the GPU ONNX Runtime build.")
     args = ap.parse_args(argv)
 
     try:
         cv2, _ = import_runtime()
         out_path = resolve_output_path(args.annotate, args.overwrite) if args.annotate else None
-        analyzer = FaceAnalyzer(args.det_model, args.rec_model)
+        analyzer = FaceAnalyzer(args.det_model, args.rec_model, device=args.device)
         if args.image:
             img = cv2.imread(str(args.image))
             if img is None:

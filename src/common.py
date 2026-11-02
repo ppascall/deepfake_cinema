@@ -20,10 +20,39 @@ DEFAULT_DETECTOR = MODELS_DIR / "buffalo_l" / "det_10g.onnx"
 DEFAULT_RECOGNIZER = MODELS_DIR / "buffalo_l" / "w600k_r50.onnx"
 
 CPU_PROVIDERS = ["CPUExecutionProvider"]
+CUDA_PROVIDERS = ["CUDAExecutionProvider", "CPUExecutionProvider"]
 
 
 class ToolError(Exception):
     """A user-facing error: the message should say what to do next."""
+
+
+def inference_providers(device: str) -> list[str]:
+    if device == "cpu":
+        return CPU_PROVIDERS
+    if device != "cuda":
+        raise ToolError(f"Unsupported inference device: {device}")
+    try:
+        import onnxruntime as ort
+    except Exception as exc:
+        raise ToolError(
+            "Could not load ONNX Runtime for CUDA. Install onnxruntime-gpu and the matching CUDA/cuDNN runtime."
+        ) from exc
+    if hasattr(ort, "preload_dlls"):
+        try:
+            ort.preload_dlls()
+        except Exception as exc:
+            raise ToolError(f"Could not preload CUDA/cuDNN libraries for ONNX Runtime: {exc}") from exc
+    if "CUDAExecutionProvider" not in ort.get_available_providers():
+        raise ToolError(
+            "CUDAExecutionProvider is unavailable. Install onnxruntime-gpu and the matching CUDA/cuDNN runtime, "
+            "then verify that the NVIDIA GPU is visible to this process."
+        )
+    return CUDA_PROVIDERS
+
+
+def inference_context_id(device: str) -> int:
+    return 0 if device == "cuda" else -1
 
 
 def show(path: Path | str) -> str:

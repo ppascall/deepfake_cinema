@@ -23,12 +23,15 @@ def main() -> int:
     ap.add_argument("--model", type=Path, default=DEFAULT_SWAPPER)
     ap.add_argument("--det-model", type=Path, default=DEFAULT_DETECTOR)
     ap.add_argument("--rec-model", type=Path, default=DEFAULT_RECOGNIZER)
+    ap.add_argument("--device", choices=["cpu", "cuda"], default="cpu",
+                    help="Check the selected ONNX Runtime inference provider.")
     ap.add_argument("--output-dir", type=Path, default=PROJECT_ROOT / "output")
     args = ap.parse_args()
 
     video = args.video or (DEFAULT_VIDEO if args.inputs else None)
     photo = args.source_face or (DEFAULT_SOURCE_FACE if args.inputs else None)
-    checks = run_checks(video, photo, args.model, args.det_model, args.rec_model, args.output_dir)
+    checks = run_checks(video, photo, args.model, args.det_model, args.rec_model,
+                        args.output_dir, device=args.device)
     return 0 if print_report(checks) else 1
 
 

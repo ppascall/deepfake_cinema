@@ -1,8 +1,10 @@
-# Movie face-swap prototype (offline, CPU)
+# Movie face-swap prototype (CPU or CUDA)
 
 Replaces one visible face in a **prerecorded MP4** with the face from a **photo of a consenting person**,
-and writes a new MP4 that keeps the original audio. It runs locally on the CPU, offline, and is **slow**
-(far below real time). Nothing is uploaded anywhere and nothing is downloaded automatically.
+and writes a new MP4 that keeps the original audio. It runs on CPU by default and can optionally use an NVIDIA
+CUDA GPU or offload processing to a temporary Runcrate instance. Local processing does not upload files; cloud
+processing transfers the selected media and authorized model files to the rented machine. Model weights are
+never downloaded automatically.
 
 > Only process footage and face photos you have the right to use, and only swap in the face of someone who
 > has consented. Do not publish results in a way that could mislead viewers about who appears in them.
@@ -10,7 +12,7 @@ and writes a new MP4 that keeps the original audio. It runs locally on the CPU, 
 ## How it works
 
 ```
-input/movie.mp4 --OpenCV--> frame --detect largest face--> swap (InSwapper, ONNX Runtime CPU)
+input/movie.mp4 --OpenCV--> frame --detect largest face--> swap (InSwapper, ONNX Runtime CPU/CUDA)
                                                               |
                           output/final_movie.mp4 <--FFmpeg mux (original audio)-- silent temp video
 ```
@@ -68,8 +70,75 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
-Packages: `numpy`, `opencv-python`, `onnxruntime` (CPU), `insightface` (used only as a library for the
-SCRFD detector, ArcFace recognizer and the InSwapper wrapper; its model auto-download is never used).
+Packages: `numpy`, `opencv-python`, `onnxruntime` (CPU by default), `insightface` (used only as a library for the
+SCRFD detector, ArcFace recognizer and the InSwapper wrapper; its model auto-download is never used), and
+`runcrate-sdk` for optional remote processing.
+
+## Run the laptop UI with a Runcrate GPU
+
+The UI stays on your laptop. When `RUNCRATE_API_KEY` is set, each processing request creates one GPU instance,
+copies the selected video segment, face photo, and three model files over SSH, runs the processor with CUDA,
+downloads the result into local `output/`, then terminates the instance. Without an API key, the existing local
+CPU path is used. The remote instance has a maximum runtime as a billing safeguard.
+
+1. In Runcrate, register the public half of an SSH key and note its SSH key ID. To create a dedicated key in
+  PowerShell, run `New-Item -ItemType Directory -Force .secrets` followed by
+  `ssh-keygen -t ed25519 -f .secrets/id_ed25519 -C deepfake-cinema`, then add the contents of
+  `.secrets/id_ed25519.pub` in Runcrate. The unattended app needs a key without a passphrase; protect this
+  dedicated private key with your Windows account. Keep it at `.secrets/id_ed25519`. The private key is
+  mounted read-only into the app container and is never sent as a file to Runcrate.
+2. Copy `.env.example` to `.env`. Fill in `RUNCRATE_API_KEY` and `RUNCRATE_SSH_KEY_ID`; the default private-key
+  path already matches the Compose mount. `RUNCRATE_GPU_TYPE` defaults to `RTX4090`; `RUNCRATE_MAX_RUNTIME_MINUTES`
+  defaults to `240` and accepts values from 5 to 10080.
+3. Start the laptop UI:
+
+```powershell
+Copy-Item .env.example .env
+docker compose up --build
+```
+
+Open <http://localhost:3000>, upload/select a video and face, confirm consent, and start processing. The API key
+is only used by the local server; it is not sent to the browser or GPU instance. The video, selected face photo,
+and authorized models are transferred to Runcrate for the job. The remote instance is terminated afterward;
+the original inputs and downloaded result remain on your laptop. Runcrate setup requires an active account,
+credits, a registered SSH key, and the matching private key available locally.
+
+## Optional: NVIDIA CUDA inference
+
+The normal Python environment and Docker image remain CPU-based. For CUDA, use a Linux machine with an NVIDIA
+GPU and a driver compatible with CUDA 12.8. The GPU ONNX Runtime build must match the installed CUDA/cuDNN
+libraries; `onnxruntime-gpu` is not a substitute for the NVIDIA driver.
+
+For a Python environment on the GPU machine, install the normal dependencies, replace CPU ONNX Runtime with
+the GPU package, then verify the provider:
+
+```bash
+python -m pip install -r requirements.txt
+python -m pip uninstall -y onnxruntime
+python -m pip install -r requirements-gpu.txt
+python scripts/check_environment.py --device cuda
+```
+
+Run the processor with `--device cuda`. The detector, recognizer, and swapper all use CUDA; ONNX Runtime may
+fall back to CPU for unsupported model operations. Without the option, CPU remains the default.
+
+For Docker, install the NVIDIA Container Toolkit on the Linux host and use the CUDA Compose overlay:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.cuda.yml up --build
+```
+
+The overlay selects the CUDA image, exposes all host GPUs to the container, and sets the web-launched processor
+to CUDA. Check the runtime from the container with:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.cuda.yml exec deepfake-cinema python -c "import onnxruntime as ort; print(ort.get_available_providers())"
+```
+
+The result should include `CUDAExecutionProvider`. For a rented VM, keep the app bound to the VM's loopback and
+access it through an SSH tunnel, for example `ssh -L 3000:127.0.0.1:3000 user@your-vm`; do not expose the
+processing UI directly to the public internet. Videos, captured photos, and model files are present on that
+cloud machine while processing, so remove them when they are no longer needed.
 
 ## 3. Models and licensing
 
@@ -170,8 +239,9 @@ after it and the original audio. Once the source playback ends and rendering is 
 starts from the beginning automatically (when that option is enabled).
 
 This is not frame-by-frame live replacement: if CPU rendering is still running when the first playback
-ends, the page waits and then replays the completed version. The photo is sent only to this local server;
-no external service is involved. Camera access is available from `localhost` or another HTTPS origin.
+ends, the page waits and then replays the completed version. The photo is sent to this local server first.
+If Runcrate is configured, the selected face photo and video segment are then transferred to the remote GPU
+instance; otherwise processing stays local. Camera access is available from `localhost` or another HTTPS origin.
 The server also requires a consent marker on capture and processing requests.
 
 Output videos use timestamped filenames in `output/`, and the page serves the newest MP4. **Process
@@ -185,13 +255,14 @@ APP_UID="$(id -u)" APP_GID="$(id -g)" docker compose up --build
 ```
 
 On other systems, `docker compose up --build` uses UID/GID 1000 by default. When the image is ready, open
-<http://localhost:3000>. The page only listens on your machine, and the input and model folders are mounted
-read-only; generated files and the captured face are written to `output/`. Allow camera access in the
+<http://localhost:3000>. The page only listens on your machine; the input folder accepts UI video uploads, the
+model folder is mounted read-only, and generated files and captured faces are written to `output/`. Allow camera access in the
 browser to start the experience. Stop the service with `Ctrl+C` (or `docker compose down`).
 
-The first build downloads the base image and installs the Python dependencies; model files remain local and
-are never automatically downloaded. Processing itself is offline. If you deny camera access, capture
-fails without starting processing. The command-line capture workflow remains available below.
+The first build downloads the base image and installs the Python dependencies; model files are never
+automatically downloaded. With Runcrate configured, selected media and model files are transferred to the
+remote instance; without it, processing stays local. If you deny camera access, capture fails without starting
+processing. The command-line capture workflow remains available below.
 
 ## Optional: consent-based live face capture
 
@@ -263,7 +334,7 @@ python -m src.process_video \
 | `--fps R` | `20` | output frame rate; source frames are dropped by timestamp, never duplicated, so audio stays in sync (`0` = keep source rate) |
 | `--scale-height H` | `720` | downscale to height H, aspect ratio kept, never upscales (`0` = keep) |
 | `--det-size N` | `640` | detector input size (multiple of 32); smaller is faster, may miss small faces |
-| `--device` | `cpu` | only CPU is supported |
+| `--device` | `cpu` | `cpu` or `cuda`; CUDA requires the GPU ONNX Runtime build and compatible NVIDIA runtime |
 | `--keep-temp` | off | keep the temporary directory on success |
 | `--dry-run` | off | checks and plan only |
 
