@@ -68,6 +68,12 @@ def test_remote_command_uses_cuda_and_selected_scene():
         5.5,
     )
 
+    uninstall_both = command.index("pip uninstall -y onnxruntime onnxruntime-gpu")
+    install_requirements = command.index("pip install --no-cache-dir -r /root/job/requirements.txt")
+    uninstall_cpu = command.index("pip uninstall -y onnxruntime >/dev/null")
+    install_gpu = command.index("pip install --no-cache-dir -r /root/job/requirements-gpu.txt")
+
+    assert uninstall_both < install_requirements < uninstall_cpu < install_gpu
     assert "--device cuda" in command
     assert "--max-seconds 5.5" in command
     assert "/root/job/input/video.mp4" in command

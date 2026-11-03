@@ -1,5 +1,61 @@
 import { expect, test } from "@playwright/test";
 
+test("does not repeatedly update the unchanged processing status", async ({ page }) => {
+  const playback = await page.context().newPage();
+  await playback.addInitScript(() => {
+    HTMLMediaElement.prototype.play = () => Promise.resolve();
+    HTMLMediaElement.prototype.load = () => {};
+  });
+  await playback.route("**/api/status", (route) => route.fulfill({
+    json: { state: "running", logs: [] },
+  }));
+  await playback.goto("/video?experience=1&startAt=100&file=test-source.mp4");
+  await expect(playback.locator("#video-status")).toContainText("It will switch to the processed scene");
+
+  await playback.evaluate(() => {
+    const status = document.querySelector("#video-status");
+    if (!(status instanceof HTMLElement)) {
+      throw new Error("Playback status element was not found.");
+    }
+    const counter = { count: 0 };
+    Object.defineProperty(window, "__videoStatusMutationCounter", { value: counter });
+    new MutationObserver((records) => {
+      counter.count += records.length;
+    }).observe(status, { childList: true, characterData: true, subtree: true });
+  });
+  await playback.waitForTimeout(2200);
+
+  const mutationCount = await playback.evaluate(
+    () => (window as typeof window & {
+      __videoStatusMutationCounter: { count: number };
+    }).__videoStatusMutationCounter.count,
+  );
+  expect(mutationCount).toBe(0);
+  await playback.close();
+});
+
+test("releases the handoff lock after processed-video load failures", async ({ page }) => {
+  const handoffAttempts = new Set<string>();
+  await page.addInitScript(() => {
+    HTMLMediaElement.prototype.play = () => Promise.resolve();
+  });
+  await page.route("**/api/status", (route) => route.fulfill({
+    json: { state: "succeeded", logs: [] },
+  }));
+  await page.route("**/api/output**", (route) => {
+    const url = new URL(route.request().url());
+    handoffAttempts.add(url.searchParams.get("run") || "");
+    return route.fulfill({ status: 404 });
+  });
+  await page.goto("/video?experience=1&startAt=0&file=test-source.mp4");
+  await expect(page.locator("#video-status")).toContainText("Retrying the handoff", { timeout: 10_000 });
+  await expect.poll(() => handoffAttempts.size, { timeout: 10_000 }).toBeGreaterThanOrEqual(1);
+  await page.locator("#live-video").evaluate((video: HTMLVideoElement) => {
+    video.dispatchEvent(new Event("timeupdate"));
+  });
+  await expect.poll(() => handoffAttempts.size, { timeout: 10_000 }).toBeGreaterThanOrEqual(2);
+});
+
 test("captures a face, plays the source up to the scene, then hands off to the processed film", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("checkbox", { name: /I agree to use this face image/ }).check();

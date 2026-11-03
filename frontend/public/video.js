@@ -17,6 +17,12 @@ let transitionWaiting = false;
 let outputIsReady = false;
 let transitionInProgress = false;
 
+function setStatus(message) {
+  if (statusElement.textContent !== message) {
+    statusElement.textContent = message;
+  }
+}
+
 function setSource(src) {
   const normalizedSrc = new URL(src, window.location.href).toString();
   if (lastPreviewUrl === normalizedSrc) {
@@ -29,7 +35,7 @@ function setSource(src) {
 
 function playSource() {
   videoElement.play().catch(() => {
-    statusElement.textContent = "Press play to start the film.";
+    setStatus("Press play to start the film.");
   });
 }
 
@@ -45,13 +51,13 @@ async function switchToProcessedFilm() {
   const onMetadata = () => {
     videoElement.removeEventListener("loadedmetadata", onMetadata);
     videoElement.currentTime = Math.min(cutTime, Math.max(videoElement.duration - 0.05, 0));
-    statusElement.textContent = "Switched to the processed scene; the stitched film is playing.";
+    setStatus("Switched to the processed scene; the stitched film is playing.");
     if (autoplayResult && resumePlayback) {
       playSource();
     } else if (autoplayResult && !experienceMode) {
       playSource();
     } else if (!autoplayResult) {
-      statusElement.textContent = "The processed scene is ready at the cut. Press play to continue.";
+      setStatus("The processed scene is ready at the cut. Press play to continue.");
     }
     transitionInProgress = false;
   };
@@ -74,7 +80,7 @@ function checkTransitionBoundary() {
     void switchToProcessedFilm();
   } else {
     transitionWaiting = true;
-    statusElement.textContent = "The selected scene starts here. Holding at the cut until the processed scene is ready…";
+    setStatus("The selected scene starts here. Holding at the cut until the processed scene is ready…");
   }
 }
 
@@ -97,14 +103,14 @@ async function refreshPreview() {
         if (transitionWaiting || videoElement.currentTime + 0.05 >= transitionAt) {
           await switchToProcessedFilm();
         } else {
-          statusElement.textContent = `Playing the original film until ${transitionAt}s; the processed scene is ready.`;
+          setStatus(`Playing the original film until ${transitionAt}s; the processed scene is ready.`);
         }
       } else if (!experienceMode || sourcePlaybackEnded) {
         const outputIsCurrent = lastPreviewUrl.includes("/api/output");
         if (!outputIsCurrent) {
           setSource(`/api/output?run=${Date.now()}`);
         }
-        statusElement.textContent = "The complete stitched film is ready.";
+        setStatus("The complete stitched film is ready.");
         if (autoplayResult && !outputIsCurrent) {
           playSource();
         }
@@ -113,7 +119,7 @@ async function refreshPreview() {
           setSource(`/api/video?file=${encodeURIComponent(selectedVideo)}`);
           playSource();
         }
-        statusElement.textContent = "Render complete. The finished film will start after this playback ends.";
+        setStatus("Render complete. The finished film will start after this playback ends.");
       }
       lastStatusState = nextState;
       return;
@@ -124,7 +130,7 @@ async function refreshPreview() {
         transitionWaiting = false;
         playSource();
       }
-      statusElement.textContent = "Processing failed. The source film is still available; check the setup page log.";
+      setStatus("Processing failed. The source film is still available; check the setup page log.");
       lastStatusState = nextState;
       return;
     }
@@ -134,9 +140,9 @@ async function refreshPreview() {
         setSource(`/api/video?file=${encodeURIComponent(selectedVideo)}`);
         playSource();
       }
-      statusElement.textContent = experienceMode
+      setStatus(experienceMode
         ? `Playing the original film. It will switch to the processed scene at ${transitionEnabled ? `${transitionAt}s` : "the selected scene"} once ready.`
-        : "Processing selected frames; previewing the source clip in real time.";
+        : "Processing selected frames; previewing the source clip in real time.");
       lastStatusState = nextState;
       return;
     }
@@ -147,18 +153,26 @@ async function refreshPreview() {
     if (lastStatusState !== "idle") {
       playSource();
     }
-    statusElement.textContent = experienceMode
+    setStatus(experienceMode
       ? "Your film is ready to play. Processing starts when the setup page launches the experience."
-      : "Previewing the selected source video.";
+      : "Previewing the selected source video.");
     lastStatusState = "idle";
   } catch (error) {
-    statusElement.textContent = error.message;
+    setStatus(error.message);
   }
 }
 
 localStorage.setItem("deepfake-selected-video", selectedVideo);
 videoElement.addEventListener("error", () => {
-  statusElement.textContent = "The selected clip could not be loaded. Pick an MP4 from the input folder.";
+  if (outputIsReady && experienceMode && transitionEnabled && lastPreviewUrl.includes("/api/output")) {
+    transitionWaiting = false;
+    transitionInProgress = false;
+    setSource(`/api/video?file=${encodeURIComponent(selectedVideo)}`);
+    setStatus("The processed video could not be loaded yet. Retrying the handoff at the selected scene…");
+    playSource();
+    return;
+  }
+  setStatus("The selected clip could not be loaded. Pick an MP4 from the input folder.");
 });
 videoElement.addEventListener("timeupdate", checkTransitionBoundary);
 videoElement.addEventListener("ended", () => {

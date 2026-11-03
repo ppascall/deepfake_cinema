@@ -188,7 +188,7 @@ try {
   });
   const bridgePort = bridgeServer.address().port;
   const quote = (value) => JSON.stringify(value);
-  await writeFile(composeOverride, `services:\n  deepfake-cinema:\n    ports:\n      - "127.0.0.1:${port}:3000"\n    volumes:\n      - ${quote(inputDir)}:/app/input\n      - ${quote(outputDir)}:/app/output\n      - ${quote(modelsDir)}:/app/models:ro\n      - ${quote(bridgeTokenFile)}:/runcrate-bridge/token:ro\n    environment:\n      RUNCRATE_INSTANCE: e2e-mock\n      RUNCRATE_BRIDGE_URL: http://host.docker.internal:${bridgePort}\n`);
+  await writeFile(composeOverride, `services:\n  deepfake-cinema:\n    ports: !override\n      - "127.0.0.1:${port}:3000"\n    volumes:\n      - ${quote(`${inputDir}:/app/input`)}\n      - ${quote(`${outputDir}:/app/output`)}\n      - ${quote(`${modelsDir}:/app/models:ro`)}\n      - ${quote(`${bridgeTokenFile}:/runcrate-bridge/token:ro`)}\n    environment:\n      RUNCRATE_INSTANCE: e2e-mock\n      RUNCRATE_BRIDGE_URL: http://host.docker.internal:${bridgePort}\n`);
 
   run("docker", [
     "compose", "-p", composeProject,

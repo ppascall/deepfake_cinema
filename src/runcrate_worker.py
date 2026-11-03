@@ -155,9 +155,11 @@ def remote_process_command(remote_dir: PurePosixPath, video: PurePosixPath,
         f"mkdir -p {shlex.quote(str(venv.parent))}",
         f"if [ ! -x {shlex.quote(str(venv / 'bin/python'))} ]; then "
         f"python3 -m venv {shlex.quote(str(venv))}; fi",
+        f"{shlex.quote(str(venv / 'bin/python'))} -m pip uninstall -y "
+        "onnxruntime onnxruntime-gpu >/dev/null 2>&1 || true",
         f"{shlex.quote(str(venv / 'bin/python'))} -m pip install --no-cache-dir -r "
         f"{shlex.quote(str(remote_dir / 'requirements.txt'))}",
-        f"{shlex.quote(str(venv / 'bin/python'))} -m pip uninstall -y onnxruntime >/dev/null 2>&1 || true",
+        f"{shlex.quote(str(venv / 'bin/python'))} -m pip uninstall -y onnxruntime >/dev/null 2>&1",
         f"{shlex.quote(str(venv / 'bin/python'))} -m pip install --no-cache-dir -r "
         f"{shlex.quote(str(remote_dir / 'requirements-gpu.txt'))}",
     ]

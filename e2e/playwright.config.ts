@@ -29,6 +29,7 @@ module.exports = defineConfig({
     url: `http://127.0.0.1:${port}`,
     reuseExistingServer: false,
     timeout: 180_000,
+    gracefulShutdown: { signal: "SIGTERM", timeout: 5000 },
     stdout: "pipe",
     stderr: "pipe",
   },
