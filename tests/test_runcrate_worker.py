@@ -89,10 +89,15 @@ def test_job_reuses_instance_and_leaves_it_running_by_default(tmp_path, monkeypa
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     ssh_commands = []
+    cleanup_commands = []
     monkeypatch.setattr(runcrate_worker, "run_cli", fake_run_cli)
     monkeypatch.setattr(
         runcrate_worker, "run_ssh",
         lambda instance, command: ssh_commands.append((instance, command)),
+    )
+    monkeypatch.setattr(
+        runcrate_worker, "run_ssh_args",
+        lambda instance, *command: cleanup_commands.append((instance, command)),
     )
     args = SimpleNamespace(
         video=video, source_face=face, output=output, max_seconds=8.0,
@@ -104,8 +109,11 @@ def test_job_reuses_instance_and_leaves_it_running_by_default(tmp_path, monkeypa
     assert result == output
     assert output.read_bytes() == b"processed scene"
     assert calls[0][0][:3] == ["runcrate", "cp", "-r"]
-    assert len(ssh_commands) == 2  # processing and temporary-file cleanup
+    assert len(ssh_commands) == 1
     assert "--device cuda" in ssh_commands[0][1]
+    assert cleanup_commands[0][0] == "face-swap"
+    assert cleanup_commands[0][1][:3] == ("rm", "-rf", "--")
+    assert cleanup_commands[0][1][3].startswith("/root/deepfake_cinema_")
     assert not any(command[:3] == ["runcrate", "instances", "delete"] for command, _ in calls)
     assert "Leaving Runcrate instance 'face-swap' running" in capsys.readouterr().out
 
@@ -130,6 +138,7 @@ def test_shutdown_is_opt_in(monkeypatch, tmp_path):
 
     monkeypatch.setattr(runcrate_worker, "run_cli", fake_run_cli)
     monkeypatch.setattr(runcrate_worker, "run_ssh", lambda *args: None)
+    monkeypatch.setattr(runcrate_worker, "run_ssh_args", lambda *args: None)
     args = SimpleNamespace(
         video=tmp_path / "video.mp4", source_face=tmp_path / "face.jpg",
         output=tmp_path / "out" / "result.mp4", max_seconds=None,

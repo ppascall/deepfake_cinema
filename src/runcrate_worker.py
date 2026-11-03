@@ -180,6 +180,15 @@ def remote_process_command(remote_dir: PurePosixPath, video: PurePosixPath,
 
 def run_ssh(instance: str, remote_command: str) -> None:
     command = ["runcrate", "ssh", instance, "--", "bash", "-lc", remote_command]
+    _run_ssh_command(command)
+
+
+def run_ssh_args(instance: str, *remote_args: str) -> None:
+    command = ["runcrate", "ssh", instance, "--", *remote_args]
+    _run_ssh_command(command)
+
+
+def _run_ssh_command(command: list[str]) -> None:
     try:
         process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                                    text=True, bufsize=1)
@@ -235,7 +244,7 @@ def process(args) -> Path:
             if uploaded and remote_dir is not None:
                 print("Removing this job's temporary files from the GPU instance...")
                 try:
-                    run_ssh(args.instance, f"rm -rf -- {shlex.quote(str(remote_dir))}")
+                    run_ssh_args(args.instance, "rm", "-rf", "--", str(remote_dir))
                 except (ToolError, KeyboardInterrupt) as exc:
                     print(f"WARNING: Could not remove remote job files: {exc}", file=sys.stderr, flush=True)
 

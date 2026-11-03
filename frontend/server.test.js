@@ -209,22 +209,27 @@ test("submits selected files to the authenticated Runcrate bridge", async () => 
   await fs.writeFile(tokenPath, "test-bridge-token");
   await fs.writeFile(path.join(inputDirectory, "movie.mp4"), Buffer.from("video"));
   await fs.writeFile(sourceFace, Buffer.from("face"));
-  let submittedJob;
+  const submittedJobs = [];
   const bridge = http.createServer(async (request, response) => {
     assert.equal(request.headers.authorization, "Bearer test-bridge-token");
     response.setHeader("content-type", "application/json");
     if (request.method === "POST") {
-      submittedJob = JSON.parse(await new Promise((resolve) => {
+      submittedJobs.push(JSON.parse(await new Promise((resolve) => {
         let body = "";
         request.setEncoding("utf8");
         request.on("data", (chunk) => { body += chunk; });
         request.on("end", () => resolve(body));
-      }));
+      })));
       response.writeHead(202);
-      response.end(JSON.stringify({ jobId: "job-test", state: "running" }));
+      response.end(JSON.stringify({ jobId: `job-test-${submittedJobs.length}`, state: "running" }));
       return;
     }
-    response.end(JSON.stringify({ jobId: "job-test", state: "running", logs: ["Waiting for GPU"] }));
+    response.end(JSON.stringify({
+      jobId: "job-test-1",
+      state: "succeeded",
+      exitCode: 0,
+      logs: ["First GPU job finished"],
+    }));
   });
   await new Promise((resolve) => bridge.listen(0, "127.0.0.1", resolve));
   const bridgeUrl = `http://127.0.0.1:${bridge.address().port}`;
@@ -252,6 +257,7 @@ test("submits selected files to the authenticated Runcrate bridge", async () => 
       }),
     });
     assert.equal(response.status, 202);
+    const submittedJob = submittedJobs[0];
     assert.deepEqual(submittedJob, {
       instance: "face-swap",
       video: "input/movie.mp4",
@@ -264,8 +270,21 @@ test("submits selected files to the authenticated Runcrate bridge", async () => 
     assert.equal(calls.length, 0);
 
     const status = await (await fetch(`${baseUrl}/api/status`)).json();
-    assert.equal(status.state, "running");
-    assert.deepEqual(status.logs, ["Waiting for GPU"]);
+    assert.equal(status.state, "succeeded");
+    assert.deepEqual(status.logs, ["First GPU job finished"]);
+
+    const secondResponse = await fetch(`${baseUrl}/api/start`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        video: "movie.mp4",
+        sourceFace: "capture:face_manual.jpg",
+        participantConsent: true,
+      }),
+    });
+    assert.equal(secondResponse.status, 202);
+    assert.equal(submittedJobs.length, 2);
+    assert.equal(submittedJobs[1].instance, "face-swap");
   }).finally(async () => {
     await new Promise((resolve) => bridge.close(resolve));
     await fs.rm(projectRoot, { recursive: true, force: true });

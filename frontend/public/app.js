@@ -343,7 +343,9 @@ startButton.addEventListener("click", async () => {
       throw new Error(processResult.error || `Could not start processing (${processResponse.status}).`);
     }
     localStorage.setItem("deepfake-selected-video", videoName);
-    const playbackUrl = `/video?file=${encodeURIComponent(videoName)}&experience=1&autoplayResult=${showVideoInput.checked}`;
+    const playbackUrl = `/video?file=${encodeURIComponent(videoName)}&experience=1`
+      + `&startAt=${encodeURIComponent(startTime)}&endAt=${encodeURIComponent(endTime)}`
+      + `&autoplayResult=${showVideoInput.checked}`;
     playbackTab.location.href = playbackUrl;
     statusElement.textContent = `Playing ${videoName} in the new tab while the full film is prepared…`;
     await updateStatus();
