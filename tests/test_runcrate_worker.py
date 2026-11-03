@@ -97,6 +97,7 @@ def test_job_reuses_instance_and_leaves_it_running_by_default(tmp_path, monkeypa
     ssh_commands = []
     cleanup_commands = []
     monkeypatch.setattr(runcrate_worker, "run_cli", fake_run_cli)
+    monkeypatch.setattr(runcrate_worker, "ensure_remote_models", lambda *args: None)
     monkeypatch.setattr(
         runcrate_worker, "run_ssh",
         lambda instance, command: ssh_commands.append((instance, command)),
@@ -129,12 +130,13 @@ def test_shutdown_is_opt_in(monkeypatch, tmp_path):
     monkeypatch.setattr(runcrate_worker, "validate_args", lambda args: None)
     monkeypatch.setattr(runcrate_worker, "ensure_instance_running", lambda instance: None)
 
-    def fake_stage(root, video, face, project_root):
+    def fake_stage(root, video, face, project_root, include_models=True):
         staged = root / "deepfake_cinema_test"
         staged.mkdir()
         return staged, PurePosixPath("input/video.mp4"), PurePosixPath("input/face.jpg")
 
     monkeypatch.setattr(runcrate_worker, "stage_project", fake_stage)
+    monkeypatch.setattr(runcrate_worker, "ensure_remote_models", lambda *args: None)
 
     def fake_run_cli(command, action):
         commands.append(command)
@@ -156,3 +158,22 @@ def test_shutdown_is_opt_in(monkeypatch, tmp_path):
     runcrate_worker.process(args)
 
     assert commands[-1] == ["runcrate", "instances", "delete", "face-swap"]
+
+
+def test_models_are_uploaded_only_when_missing_on_the_instance(monkeypatch, tmp_path):
+    for relative in ("models/inswapper_128.onnx", "models/buffalo_l/det_10g.onnx", "models/buffalo_l/w600k_r50.onnx"):
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"x" * 2048)
+    uploads = []
+    monkeypatch.setattr(runcrate_worker, "run_cli", lambda command, action: uploads.append(command))
+    monkeypatch.setattr(runcrate_worker, "run_ssh_args", lambda *args: None)
+
+    monkeypatch.setattr(runcrate_worker, "remote_models_cached", lambda instance, sizes: True)
+    runcrate_worker.ensure_remote_models("face-swap", tmp_path / "stage", tmp_path)
+    assert uploads == []
+
+    (tmp_path / "stage").mkdir()
+    monkeypatch.setattr(runcrate_worker, "remote_models_cached", lambda instance, sizes: False)
+    runcrate_worker.ensure_remote_models("face-swap", tmp_path / "stage", tmp_path)
+    assert uploads and uploads[0][:3] == ["runcrate", "cp", "-r"]

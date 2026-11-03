@@ -8,6 +8,7 @@ const experienceMode = params.get("experience") === "1";
 const autoplayResult = params.get("autoplayResult") !== "false";
 const transitionAtParameter = params.get("startAt");
 const transitionAt = Number(transitionAtParameter);
+const endAt = Number(params.get("endAt"));
 const transitionEnabled = experienceMode && transitionAtParameter !== null
   && Number.isFinite(transitionAt) && transitionAt >= 0;
 let lastPreviewUrl = "";
@@ -16,6 +17,8 @@ let sourcePlaybackEnded = false;
 let transitionWaiting = false;
 let outputIsReady = false;
 let transitionInProgress = false;
+let switchedToOutput = false;
+let segmentMode = false;
 
 function setStatus(message) {
   if (statusElement.textContent !== message) {
@@ -40,18 +43,24 @@ function playSource() {
 }
 
 async function switchToProcessedFilm() {
-  if (transitionInProgress || !outputIsReady) {
+  if (switchedToOutput || transitionInProgress || !outputIsReady) {
     return;
   }
+  switchedToOutput = true;
   transitionInProgress = true;
   const resumePlayback = !videoElement.paused || transitionWaiting;
   transitionWaiting = false;
   const cutTime = transitionAt;
-  setSource(`/api/output?run=${Date.now()}`);
+  setSource(segmentMode ? `/api/segment?run=${Date.now()}` : `/api/output?run=${Date.now()}`);
   const onMetadata = () => {
     videoElement.removeEventListener("loadedmetadata", onMetadata);
-    videoElement.currentTime = Math.min(cutTime, Math.max(videoElement.duration - 0.05, 0));
-    setStatus("Switched to the processed scene; the stitched film is playing.");
+    if (segmentMode) {
+      videoElement.currentTime = 0;
+      setStatus("Switched to the processed scene; the deepfaked scene is playing.");
+    } else {
+      videoElement.currentTime = Math.min(cutTime, Math.max(videoElement.duration - 0.05, 0));
+      setStatus("Switched to the processed scene; the stitched film is playing.");
+    }
     if (autoplayResult && resumePlayback) {
       playSource();
     } else if (autoplayResult && !experienceMode) {
@@ -67,8 +76,20 @@ async function switchToProcessedFilm() {
   }
 }
 
+function returnToOriginalFilm() {
+  setSource(`/api/video?file=${encodeURIComponent(selectedVideo)}&run=${Date.now()}`);
+  const onMetadata = () => {
+    videoElement.removeEventListener("loadedmetadata", onMetadata);
+    videoElement.currentTime = Math.min(endAt, Math.max(videoElement.duration - 0.05, 0));
+    setStatus("Back to the original film after the processed scene.");
+    playSource();
+  };
+  videoElement.addEventListener("loadedmetadata", onMetadata);
+}
+
 function checkTransitionBoundary() {
-  if (!experienceMode || !transitionEnabled || transitionInProgress || lastPreviewUrl.includes("/api/output")) {
+  if (!experienceMode || !transitionEnabled || switchedToOutput || transitionInProgress
+      || lastPreviewUrl.includes("/api/output")) {
     return;
   }
   if (videoElement.currentTime + 0.05 < transitionAt) {
@@ -94,13 +115,21 @@ async function refreshPreview() {
     const nextState = status.state;
 
     if (nextState === "succeeded") {
-      outputIsReady = true;
+      segmentMode = Boolean(status.segmentReady) && Number.isFinite(endAt) && endAt > transitionAt;
+      outputIsReady = segmentMode || !status.stitching;
+      if (!outputIsReady && !(experienceMode && transitionEnabled)) {
+        setStatus("Building the complete film…");
+        lastStatusState = nextState;
+        return;
+      }
       if (experienceMode && transitionEnabled) {
         if (!lastPreviewUrl) {
           setSource(`/api/video?file=${encodeURIComponent(selectedVideo)}`);
           playSource();
         }
-        if (transitionWaiting || videoElement.currentTime + 0.05 >= transitionAt) {
+        if (switchedToOutput) {
+          // The processed film is already loaded; reloading it here would restart it at the cut.
+        } else if (transitionWaiting || videoElement.currentTime + 0.05 >= transitionAt) {
           await switchToProcessedFilm();
         } else {
           setStatus(`Playing the original film until ${transitionAt}s; the processed scene is ready.`);
@@ -164,9 +193,11 @@ async function refreshPreview() {
 
 localStorage.setItem("deepfake-selected-video", selectedVideo);
 videoElement.addEventListener("error", () => {
-  if (outputIsReady && experienceMode && transitionEnabled && lastPreviewUrl.includes("/api/output")) {
+  if (outputIsReady && experienceMode && transitionEnabled
+      && (lastPreviewUrl.includes("/api/output") || lastPreviewUrl.includes("/api/segment"))) {
     transitionWaiting = false;
     transitionInProgress = false;
+    switchedToOutput = false;
     setSource(`/api/video?file=${encodeURIComponent(selectedVideo)}`);
     setStatus("The processed video could not be loaded yet. Retrying the handoff at the selected scene…");
     playSource();
@@ -176,6 +207,10 @@ videoElement.addEventListener("error", () => {
 });
 videoElement.addEventListener("timeupdate", checkTransitionBoundary);
 videoElement.addEventListener("ended", () => {
+  if (segmentMode && lastPreviewUrl.includes("/api/segment")) {
+    returnToOriginalFilm();
+    return;
+  }
   sourcePlaybackEnded = true;
   if (experienceMode && transitionEnabled && outputIsReady) {
     void switchToProcessedFilm();

@@ -512,3 +512,12 @@ test("rejects invalid photo content without starting the processor", async () =>
     assert.equal((await (await fetch(`${baseUrl}/api/status`)).json()).state, "idle");
   });
 });
+
+test("reset returns a finished run to idle", async () => {
+  const server = createServer({ spawnProcess: () => new FakeChild() });
+  await withServer(server, async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/api/reset`, { method: "POST" });
+    assert.equal(response.status, 200);
+    assert.equal((await response.json()).state, "idle");
+  });
+});

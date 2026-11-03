@@ -52,6 +52,9 @@ function createServer({
     bridgeFinishing: false,
     bridgePolling: false,
     remoteConfig: null,
+    segment: null,
+    stitching: false,
+    stitchError: null,
   };
 
   function addLog(line) {
@@ -92,6 +95,28 @@ function createServer({
     run.child = null;
   }
 
+  // Marks the run as done as soon as the processed clip exists; the full film is stitched in the background.
+  function finishWithBackgroundStitch(config) {
+    const stitchToken = run.startedAt;
+    run.segment = { path: config.processorOutput, startTime: config.startTime, endTime: config.endTime };
+    run.stitching = true;
+    run.stitchError = null;
+    const outputPath = currentOutputVideo;
+    finishRun("succeeded", 0);
+    stitchProcessedRange(config.videoPath, config.processorOutput, outputPath, config.startTime, config.endTime)
+      .catch((error) => {
+        if (run.startedAt === stitchToken) {
+          run.stitchError = error.message;
+          addLog(`Could not stitch the processed range into the full video: ${error.message}`);
+        }
+      })
+      .finally(() => {
+        if (run.startedAt === stitchToken) {
+          run.stitching = false;
+        }
+      });
+  }
+
   function sendJson(response, statusCode, data) {
     response.writeHead(statusCode, {
       "content-type": "application/json; charset=utf-8",
@@ -123,7 +148,7 @@ function createServer({
       const entries = await fs.readdir(directory, { withFileTypes: true });
       const videos = [];
       for (const entry of entries) {
-        if (!entry.isFile() || !/\.mp4$/i.test(entry.name)) {
+        if (!entry.isFile() || entry.name.startsWith(".") || !/\.mp4$/i.test(entry.name)) {
           continue;
         }
         const candidate = path.join(directory, entry.name);
@@ -153,6 +178,9 @@ function createServer({
       finishedAt: run.finishedAt,
       exitCode: run.exitCode,
       logs: run.logs,
+      segmentReady: Boolean(run.segment),
+      stitching: run.stitching,
+      stitchError: run.stitchError,
     };
   }
 
@@ -213,18 +241,7 @@ function createServer({
     run.bridgeFinishing = true;
     const config = run.remoteConfig;
     if (config?.stitchFullVideo) {
-      try {
-        await stitchProcessedRange(
-          config.videoPath, config.processorOutput, currentOutputVideo,
-          config.startTime, config.endTime,
-        );
-        await fs.unlink(config.processorOutput).catch(() => {});
-        finishRun("succeeded", 0);
-      } catch (error) {
-        await fs.unlink(config.processorOutput).catch(() => {});
-        addLog(`Could not stitch the processed range into the full video: ${error.message}`);
-        finishRun("failed", 1);
-      }
+      finishWithBackgroundStitch(config);
     } else {
       finishRun("succeeded", 0);
     }
@@ -433,13 +450,22 @@ function createServer({
   }
 
   async function serveOutputVideo(request, response) {
-    if (run.state !== "succeeded") {
+    if (run.state !== "succeeded" || run.stitching) {
       response.writeHead(404, { "cache-control": "no-store" });
       response.end();
       return;
     }
     const newestOutput = await findNewestOutputVideo();
     return streamVideoFile(response, newestOutput, "processed output", request);
+  }
+
+  async function serveSegmentVideo(request, response) {
+    if (run.state !== "succeeded" || !run.segment) {
+      response.writeHead(404, { "cache-control": "no-store" });
+      response.end();
+      return;
+    }
+    return streamVideoFile(response, run.segment.path, "processed segment", request);
   }
 
   async function serveInputVideo(request, response) {
@@ -607,6 +633,23 @@ function createServer({
       return sendJson(response, 200, statusSnapshot());
     }
 
+    if (request.method === "POST" && pathname === "/api/reset") {
+      if (run.state === "running") {
+        return sendJson(response, 409, { error: "Processing is still running." });
+      }
+      run.state = "idle";
+      run.startedAt = null;
+      run.finishedAt = null;
+      run.exitCode = null;
+      run.logs = [];
+      run.bridgeJobId = null;
+      run.remoteConfig = null;
+      run.segment = null;
+      run.stitching = false;
+      run.stitchError = null;
+      return sendJson(response, 200, statusSnapshot());
+    }
+
     if (request.method === "GET" && pathname === "/api/videos") {
       return sendJson(response, 200, { videos: await listInputVideos() });
     }
@@ -632,6 +675,10 @@ function createServer({
 
     if (request.method === "GET" && pathname === "/api/video") {
       return serveInputVideo(request, response);
+    }
+
+    if (request.method === "GET" && pathname === "/api/segment") {
+      return serveSegmentVideo(request, response);
     }
 
     if (request.method === "GET" && pathname === "/api/output") {
@@ -700,6 +747,9 @@ function createServer({
         run.bridgeFinishing = false;
         run.bridgePolling = false;
         run.remoteConfig = null;
+        run.segment = null;
+        run.stitching = false;
+        run.stitchError = null;
 
         try {
           const processorOutput = stitchFullVideo
@@ -761,14 +811,7 @@ function createServer({
           child.on("close", (code) => {
             if (run.state === "running") {
               if (code === 0 && stitchFullVideo) {
-                void stitchProcessedRange(videoPath, processorOutput, currentOutputVideo, start, end)
-                  .then(() => fs.unlink(processorOutput).catch(() => {}))
-                  .then(() => finishRun("succeeded", 0))
-                  .catch((error) => {
-                    void fs.unlink(processorOutput).catch(() => {});
-                    addLog(`Could not stitch the processed range into the full video: ${error.message}`);
-                    finishRun("failed", 1);
-                  });
+                finishWithBackgroundStitch({ videoPath, processorOutput, startTime: start, endTime: end });
               } else {
                 finishRun(code === 0 ? "succeeded" : "failed", code ?? 1);
               }

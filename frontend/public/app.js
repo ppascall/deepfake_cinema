@@ -1,6 +1,7 @@
 "use strict";
 
 const startButton = document.querySelector("#start");
+const resetButton = document.querySelector("#reset-run");
 const uploadVideoButton = document.querySelector("#upload-video");
 const captureFaceButton = document.querySelector("#capture-face");
 const cancelButton = document.querySelector("#cancel");
@@ -23,6 +24,7 @@ let captureInProgress = false;
 let cancelRequested = false;
 let processingState = "idle";
 let liveSourceFace = "";
+let lastReportedState = null;
 
 const stateLabels = {
   idle: "Ready",
@@ -39,9 +41,15 @@ async function updateStatus() {
     }
     const status = await response.json();
     processingState = status.state;
-    if (!captureInProgress && status.state !== "idle") {
-      statusElement.textContent = stateLabels[status.state] || status.state;
+    // Only announce a state when it changes, so validation or error messages are not overwritten
+    // every second by a stale "Finished successfully" from the previous run.
+    if (!captureInProgress && status.state !== lastReportedState) {
+      if (status.state !== "idle" || lastReportedState !== null) {
+        statusElement.textContent = stateLabels[status.state] || status.state;
+      }
     }
+    lastReportedState = status.state;
+    resetButton.hidden = !["succeeded", "failed"].includes(status.state);
     const runInProgress = captureInProgress || status.state === "running";
     startButton.disabled = runInProgress;
     captureFaceButton.disabled = runInProgress || captureInProgress;
@@ -286,6 +294,23 @@ async function captureJpeg(stream) {
     }, "image/jpeg", 0.92);
   });
 }
+
+resetButton.addEventListener("click", async () => {
+  resetButton.disabled = true;
+  try {
+    const response = await fetch("/api/reset", { method: "POST" });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(result.error || `Could not reset (${response.status}).`);
+    }
+    statusElement.textContent = "Ready for a new run.";
+    await updateStatus();
+  } catch (error) {
+    statusElement.textContent = error.message;
+  } finally {
+    resetButton.disabled = false;
+  }
+});
 
 cancelButton.addEventListener("click", () => {
   cancelRequested = true;

@@ -20,6 +20,7 @@ STARTUP_TIMEOUT_SECONDS = 20 * 60
 POLL_INTERVAL_SECONDS = 10
 DEFAULT_INSTANCE = "face-swap"
 REMOTE_ROOT = PurePosixPath("/root")
+REMOTE_MODEL_DIR = PurePosixPath("/root/.cache/deepfake-cinema/models")
 MODEL_PATHS = (
     (Path("models/inswapper_128.onnx"), "face swapper"),
     (Path("models/buffalo_l/det_10g.onnx"), "face detector"),
@@ -111,8 +112,57 @@ def ensure_instance_running(instance: str) -> None:
         )
 
 
+def check_local_models(project_root: Path = PROJECT_ROOT) -> dict[Path, int]:
+    sizes = {}
+    for relative_path, label in MODEL_PATHS:
+        source = project_root / relative_path
+        if not source.is_file() or source.stat().st_size < 1024:
+            raise ToolError(f"Required {label} model is missing or invalid: {show(source)}")
+        sizes[relative_path] = source.stat().st_size
+    return sizes
+
+
+def remote_models_cached(instance: str, sizes: dict[Path, int]) -> bool:
+    """True when every model already exists on the instance with the expected size."""
+    paths = [shlex.quote(str(REMOTE_MODEL_DIR / relative.relative_to("models"))) for relative in sizes]
+    command = ["runcrate", "ssh", instance, "--", "bash", "-lc", "stat -c %s " + " ".join(paths)]
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=120)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    if result.returncode != 0:
+        return False
+    reported = [line.strip() for line in result.stdout.splitlines() if line.strip().isdigit()]
+    return reported[-len(sizes):] == [str(size) for size in sizes.values()]
+
+
+def ensure_remote_models(instance: str, stage_root: Path, project_root: Path = PROJECT_ROOT) -> None:
+    sizes = check_local_models(project_root)
+    if remote_models_cached(instance, sizes):
+        print("Face models are already cached on the GPU instance; skipping the model upload.")
+        return
+    print("Uploading the face models to the GPU instance (one time only, they are cached afterwards)...")
+    upload_name = f"models_upload_{uuid.uuid4().hex[:10]}"
+    models_dir = stage_root / upload_name
+    for relative_path in sizes:
+        destination = models_dir / relative_path.relative_to("models")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(project_root / relative_path, destination)
+    remote_stage = REMOTE_ROOT / upload_name
+    try:
+        run_cli(["runcrate", "cp", "-r", str(models_dir), f"{instance}:/root/"],
+                "uploading the face models")
+        run_ssh_args(instance, "bash", "-c",
+                     f"mkdir -p {shlex.quote(str(REMOTE_MODEL_DIR.parent))} && "
+                     f"rm -rf {shlex.quote(str(REMOTE_MODEL_DIR))} && "
+                     f"mv {shlex.quote(str(remote_stage))} {shlex.quote(str(REMOTE_MODEL_DIR))}")
+    finally:
+        shutil.rmtree(models_dir, ignore_errors=True)
+
+
 def stage_project(stage_root: Path, video: Path, source_face: Path,
-                  project_root: Path = PROJECT_ROOT) -> tuple[Path, PurePosixPath, PurePosixPath]:
+                  project_root: Path = PROJECT_ROOT,
+                  include_models: bool = True) -> tuple[Path, PurePosixPath, PurePosixPath]:
     """Stage only the processor/runtime files and selected media/model assets."""
     upload_dir = stage_root / f"deepfake_cinema_{uuid.uuid4().hex[:10]}"
     upload_dir.mkdir(parents=True)
@@ -126,13 +176,14 @@ def stage_project(stage_root: Path, video: Path, source_face: Path,
             raise ToolError(f"Required dependency file not found: {show(source)}")
         shutil.copy2(source, upload_dir / requirement_file)
 
-    for relative_path, label in MODEL_PATHS:
-        source = project_root / relative_path
-        destination = upload_dir / relative_path
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        if not source.is_file() or source.stat().st_size < 1024:
-            raise ToolError(f"Required {label} model is missing or invalid: {show(source)}")
-        shutil.copy2(source, destination)
+    if include_models:
+        for relative_path, label in MODEL_PATHS:
+            source = project_root / relative_path
+            destination = upload_dir / relative_path
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            if not source.is_file() or source.stat().st_size < 1024:
+                raise ToolError(f"Required {label} model is missing or invalid: {show(source)}")
+            shutil.copy2(source, destination)
 
     input_dir = upload_dir / "input"
     input_dir.mkdir()
@@ -145,7 +196,9 @@ def stage_project(stage_root: Path, video: Path, source_face: Path,
 
 def remote_process_command(remote_dir: PurePosixPath, video: PurePosixPath,
                            source_face: PurePosixPath, output: PurePosixPath,
-                           max_seconds: float | None) -> str:
+                           max_seconds: float | None,
+                           models_dir: PurePosixPath | None = None) -> str:
+    models_dir = models_dir or remote_dir / "models"
     venv = PurePosixPath("/root/.cache/deepfake-cinema/venv")
     command = [
         "set -eu",
@@ -167,9 +220,9 @@ def remote_process_command(remote_dir: PurePosixPath, video: PurePosixPath,
         str(venv / "bin/python"), "-m", "src.process_video",
         "--video", str(remote_dir / video),
         "--source-face", str(remote_dir / source_face),
-        "--model", str(remote_dir / "models/inswapper_128.onnx"),
-        "--det-model", str(remote_dir / "models/buffalo_l/det_10g.onnx"),
-        "--rec-model", str(remote_dir / "models/buffalo_l/w600k_r50.onnx"),
+        "--model", str(models_dir / "inswapper_128.onnx"),
+        "--det-model", str(models_dir / "buffalo_l/det_10g.onnx"),
+        "--rec-model", str(models_dir / "buffalo_l/w600k_r50.onnx"),
         "--device", "cuda",
         "--output", str(remote_dir / output),
         "--overwrite",
@@ -216,21 +269,23 @@ def process(args) -> Path:
     job_succeeded = False
     with tempfile.TemporaryDirectory(prefix=".runcrate_", dir=args.output.parent) as temp_dir:
         stage_root = Path(temp_dir)
+        ensure_remote_models(args.instance, stage_root, PROJECT_ROOT)
         upload_dir, remote_video, remote_face = stage_project(
-            stage_root, args.video, args.source_face, PROJECT_ROOT
+            stage_root, args.video, args.source_face, PROJECT_ROOT, include_models=False
         )
         remote_dir = REMOTE_ROOT / upload_dir.name
         remote_output = remote_dir / "output.mp4"
         downloaded_output = stage_root / "downloaded.mp4"
         try:
-            print(f"Uploading selected segment, face photo, processor files, and required models to '{args.instance}'...")
+            print(f"Uploading selected segment, face photo and processor files to '{args.instance}'...")
             run_cli(["runcrate", "cp", "-r", str(upload_dir), f"{args.instance}:/root/"],
                     "uploading this job's files")
             uploaded = True
 
             print("Preparing the CUDA runtime and starting video processing...")
             remote_command = remote_process_command(
-                remote_dir, remote_video, remote_face, PurePosixPath("output.mp4"), args.max_seconds
+                remote_dir, remote_video, remote_face, PurePosixPath("output.mp4"), args.max_seconds,
+                REMOTE_MODEL_DIR,
             )
             run_ssh(args.instance, remote_command)
 
