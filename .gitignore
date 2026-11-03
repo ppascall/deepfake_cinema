@@ -4,6 +4,7 @@ __pycache__/
 .tmp_*/
 .env
 .secrets/
+.runcrate-bridge-token
 
 # Private media and model weights stay local
 input/*

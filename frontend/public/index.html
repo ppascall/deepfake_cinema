@@ -40,8 +40,8 @@
           <label class="consent">
             <input id="participant-consent" type="checkbox">
             I agree to use this face image to alter the selected scene. Live capture takes one photo.
-            If Runcrate is configured, the selected face, video segment, and authorized models are sent to Runcrate;
-            the finished video is returned to this computer.
+            If Runcrate is configured, the selected face, video segment, authorized models, and minimal processor
+            files are sent to Runcrate; the finished video is returned to this computer.
           </label>
         </div>
       </section>
@@ -87,6 +87,10 @@
             <input id="show-video" type="checkbox" checked>
             Play the stitched film when it is ready
           </label>
+          <label class="video-option">
+            <input id="shutdown-after-job" type="checkbox">
+            Delete the Runcrate instance after a successful job (permanent; off by default)
+          </label>
         </div>
       </section>
 
@@ -94,8 +98,6 @@
         <button id="start" type="button">Start experience</button>
         <p id="status" class="status" role="status" aria-live="polite">Ready to configure.</p>
       </section>
-      <p id="status" class="status" role="status" aria-live="polite">Ready</p>
-
       <details>
         <summary>Processing log</summary>
         <pre id="logs" aria-live="polite">No run started.</pre>

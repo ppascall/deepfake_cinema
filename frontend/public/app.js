@@ -17,6 +17,7 @@ const clipStartInput = document.querySelector("#clip-start");
 const clipEndInput = document.querySelector("#clip-end");
 const videoUploadInput = document.querySelector("#video-upload");
 const showVideoInput = document.querySelector("#show-video");
+const shutdownAfterJobInput = document.querySelector("#shutdown-after-job");
 const participantConsent = document.querySelector("#participant-consent");
 let captureInProgress = false;
 let cancelRequested = false;
@@ -333,6 +334,7 @@ startButton.addEventListener("click", async () => {
         overwrite: false,
         sourceFace,
         stitchFullVideo: true,
+        shutdownAfterJob: shutdownAfterJobInput.checked,
         participantConsent: true,
       }),
     });

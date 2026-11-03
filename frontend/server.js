@@ -30,11 +30,10 @@ function createServer({
   probeVideoDuration = getVideoDuration,
   python = process.env.PYTHON || "python3",
   device = process.env.DEEPFAKE_DEVICE || "cpu",
-  runcrateApiKey = process.env.RUNCRATE_API_KEY || "",
-  runcrateGpuType = process.env.RUNCRATE_GPU_TYPE || "RTX4090",
-  runcrateSshKeyId = process.env.RUNCRATE_SSH_KEY_ID || "",
-  runcrateSshPrivateKeyPath = process.env.RUNCRATE_SSH_PRIVATE_KEY_PATH || "",
-  runcrateMaxRuntimeMinutes = process.env.RUNCRATE_MAX_RUNTIME_MINUTES || "240",
+  runcrateBridgeUrl = process.env.RUNCRATE_BRIDGE_URL || "",
+  runcrateBridgeTokenPath = process.env.RUNCRATE_BRIDGE_TOKEN_PATH || "",
+  runcrateInstance = process.env.RUNCRATE_INSTANCE || "face-swap",
+  projectRoot = PROJECT_ROOT,
   captureDirectory = DEFAULT_CAPTURE_DIRECTORY,
   inputDirectory = DEFAULT_INPUT_DIRECTORY,
   outputVideo = DEFAULT_OUTPUT_VIDEO,
@@ -48,6 +47,11 @@ function createServer({
     logs: [],
     child: null,
     pendingOutput: { stdout: "", stderr: "" },
+    bridgeJobId: null,
+    bridgeWarningShown: false,
+    bridgeFinishing: false,
+    bridgePolling: false,
+    remoteConfig: null,
   };
 
   function addLog(line) {
@@ -150,6 +154,80 @@ function createServer({
       exitCode: run.exitCode,
       logs: run.logs,
     };
+  }
+
+  async function bridgeRequest(pathname, options = {}) {
+    if (!runcrateBridgeUrl || !runcrateBridgeTokenPath) {
+      throw new Error("The authenticated Runcrate bridge is not configured. Start the app with scripts/start-with-runcrate.sh.");
+    }
+    let token;
+    try {
+      token = (await fs.readFile(runcrateBridgeTokenPath, "utf8")).trim();
+    } catch (error) {
+      throw new Error("The host Runcrate bridge token is unavailable. Restart the app with scripts/start-with-runcrate.sh.");
+    }
+    const response = await fetch(new URL(pathname, runcrateBridgeUrl), {
+      ...options,
+      headers: {
+        authorization: `Bearer ${token}`,
+        ...(options.body ? { "content-type": "application/json" } : {}),
+        ...options.headers,
+      },
+      signal: AbortSignal.timeout(5000),
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(result.error || `The Runcrate bridge returned HTTP ${response.status}.`);
+    }
+    return result;
+  }
+
+  async function refreshBridgeJob() {
+    if (!run.bridgeJobId || run.state !== "running" || run.bridgeFinishing || run.bridgePolling) {
+      return;
+    }
+    run.bridgePolling = true;
+    let remote;
+    try {
+      remote = await bridgeRequest(`/jobs/${encodeURIComponent(run.bridgeJobId)}`);
+      run.bridgeWarningShown = false;
+    } catch (error) {
+      if (!run.bridgeWarningShown) {
+        addLog(`Runcrate status is temporarily unavailable: ${error.message}`);
+        run.bridgeWarningShown = true;
+      }
+      return;
+    } finally {
+      run.bridgePolling = false;
+    }
+    run.logs = Array.isArray(remote.logs)
+      ? remote.logs.slice(-MAX_LOG_LINES).map((line) => String(line).slice(0, MAX_LOG_LINE_LENGTH))
+      : run.logs;
+    if (remote.state === "running") {
+      return;
+    }
+    if (remote.state !== "succeeded") {
+      finishRun("failed", Number.isInteger(remote.exitCode) ? remote.exitCode : 1);
+      return;
+    }
+    run.bridgeFinishing = true;
+    const config = run.remoteConfig;
+    if (config?.stitchFullVideo) {
+      try {
+        await stitchProcessedRange(
+          config.videoPath, config.processorOutput, currentOutputVideo,
+          config.startTime, config.endTime,
+        );
+        await fs.unlink(config.processorOutput).catch(() => {});
+        finishRun("succeeded", 0);
+      } catch (error) {
+        await fs.unlink(config.processorOutput).catch(() => {});
+        addLog(`Could not stitch the processed range into the full video: ${error.message}`);
+        finishRun("failed", 1);
+      }
+    } else {
+      finishRun("succeeded", 0);
+    }
   }
 
   async function readCapture(request, { requireOverwrite = true } = {}) {
@@ -525,6 +603,7 @@ function createServer({
     const pathname = url.pathname;
 
     if (request.method === "GET" && pathname === "/api/status") {
+      await refreshBridgeJob();
       return sendJson(response, 200, statusSnapshot());
     }
 
@@ -580,7 +659,10 @@ function createServer({
         return sendJson(response, 409, { error: "Processing is already running." });
       }
 
-      const startProcessing = async ({ videoPath, sourceFacePath, startTime, endTime, overwrite, stitchFullVideo = false }) => {
+      const startProcessing = async ({
+        videoPath, sourceFacePath, startTime, endTime, overwrite,
+        stitchFullVideo = false, shutdownAfterJob = false,
+      }) => {
         let selectedVideo = videoPath || path.join(PROJECT_ROOT, "input", "movie.mp4");
         const start = Number(startTime);
         const end = Number(endTime);
@@ -613,45 +695,58 @@ function createServer({
         run.exitCode = null;
         run.logs = [];
         run.pendingOutput = { stdout: "", stderr: "" };
+        run.bridgeJobId = null;
+        run.bridgeWarningShown = false;
+        run.bridgeFinishing = false;
+        run.bridgePolling = false;
+        run.remoteConfig = null;
 
         try {
           const processorOutput = stitchFullVideo
             ? path.join(path.dirname(currentOutputVideo), `.${path.basename(currentOutputVideo, ".mp4")}.segment.mp4`)
             : currentOutputVideo;
-          const remoteRuncrate = Boolean(runcrateApiKey.trim());
-          const args = remoteRuncrate
-            ? ["-m", "src.runcrate_worker", "--source-face", sourceFacePath, "--video", selectedVideo]
-            : ["-m", "src.process_video", "--source-face", sourceFacePath, "--video", selectedVideo];
+          const remoteRuncrate = Boolean(runcrateBridgeUrl && runcrateBridgeTokenPath);
           if (remoteRuncrate) {
-            args.push(
-              "--gpu-type", runcrateGpuType,
-              "--ssh-key-id", runcrateSshKeyId,
-              "--ssh-private-key", runcrateSshPrivateKeyPath,
-              "--max-runtime-minutes", runcrateMaxRuntimeMinutes,
-            );
-          } else {
-            args.push("--device", device);
+            run.remoteConfig = {
+              videoPath,
+              processorOutput,
+              startTime: start,
+              endTime: end,
+              stitchFullVideo,
+            };
+            const relativePath = (filePath) => path.relative(projectRoot, filePath).split(path.sep).join("/");
+            try {
+              const remote = await bridgeRequest("/jobs", {
+                method: "POST",
+                body: JSON.stringify({
+                  instance: runcrateInstance,
+                  video: relativePath(selectedVideo),
+                  sourceFace: relativePath(sourceFacePath),
+                  output: relativePath(processorOutput),
+                  maxSeconds: clipDuration,
+                  shutdownAfterJob,
+                }),
+              });
+              run.bridgeJobId = remote.jobId;
+              addLog(`Runcrate job ${remote.jobId} submitted to instance '${runcrateInstance}'.`);
+              return sendJson(response, 202, statusSnapshot());
+            } catch (error) {
+              addLog(`Could not submit the Runcrate job: ${error.message}`);
+              finishRun("failed", 1);
+              return sendJson(response, 502, { ...statusSnapshot(), error: error.message });
+            }
           }
-          args.push("--output", processorOutput);
+          const args = ["-m", "src.process_video", "--source-face", sourceFacePath, "--video", selectedVideo,
+            "--device", device, "--output", processorOutput];
           if (overwrite) {
             args.push("--overwrite");
           }
           if (clipDuration !== null && clipDuration > 0) {
             args.push("--max-seconds", String(clipDuration));
           }
-          const childEnvironment = { ...process.env, PYTHONUNBUFFERED: "1" };
-          if (remoteRuncrate) {
-            Object.assign(childEnvironment, {
-              RUNCRATE_API_KEY: runcrateApiKey,
-              RUNCRATE_GPU_TYPE: runcrateGpuType,
-              RUNCRATE_SSH_KEY_ID: runcrateSshKeyId,
-              RUNCRATE_SSH_PRIVATE_KEY_PATH: runcrateSshPrivateKeyPath,
-              RUNCRATE_MAX_RUNTIME_MINUTES: runcrateMaxRuntimeMinutes,
-            });
-          }
           const child = spawnProcess(python, args, {
             cwd: PROJECT_ROOT,
-            env: childEnvironment,
+            env: { ...process.env, PYTHONUNBUFFERED: "1" },
             stdio: ["ignore", "pipe", "pipe"],
           });
           run.child = child;
@@ -711,6 +806,7 @@ function createServer({
             endTime: config.endTime ?? config.end_time,
             overwrite: config.overwrite === true,
             stitchFullVideo: config.stitchFullVideo === true,
+            shutdownAfterJob: config.shutdownAfterJob === true,
           });
         } catch (error) {
           return sendJson(response, 400, { error: error.message || "The JSON request could not be processed." });

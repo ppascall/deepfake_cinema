@@ -3,6 +3,7 @@
 const assert = require("node:assert/strict");
 const { EventEmitter } = require("node:events");
 const fs = require("node:fs/promises");
+const http = require("node:http");
 const os = require("node:os");
 const path = require("node:path");
 const { PassThrough } = require("node:stream");
@@ -197,25 +198,46 @@ test("lists videos and accepts start/end settings for a selected clip", async ()
   });
 });
 
-test("dispatches processing to Runcrate when an API key is configured", async () => {
-  const inputDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "deepfake-runcrate-input-"));
-  const captureDirectory = await fs.mkdtemp(path.join(os.tmpdir(), "deepfake-runcrate-output-"));
+test("submits selected files to the authenticated Runcrate bridge", async () => {
+  const projectRoot = await fs.mkdtemp(path.join(os.tmpdir(), "deepfake-runcrate-project-"));
+  const inputDirectory = path.join(projectRoot, "input");
+  const captureDirectory = path.join(projectRoot, "output", "captured_faces");
+  const tokenPath = path.join(projectRoot, "bridge-token");
   const sourceFace = path.join(captureDirectory, "face_manual.jpg");
+  await fs.mkdir(inputDirectory, { recursive: true });
+  await fs.mkdir(captureDirectory, { recursive: true });
+  await fs.writeFile(tokenPath, "test-bridge-token");
   await fs.writeFile(path.join(inputDirectory, "movie.mp4"), Buffer.from("video"));
   await fs.writeFile(sourceFace, Buffer.from("face"));
+  let submittedJob;
+  const bridge = http.createServer(async (request, response) => {
+    assert.equal(request.headers.authorization, "Bearer test-bridge-token");
+    response.setHeader("content-type", "application/json");
+    if (request.method === "POST") {
+      submittedJob = JSON.parse(await new Promise((resolve) => {
+        let body = "";
+        request.setEncoding("utf8");
+        request.on("data", (chunk) => { body += chunk; });
+        request.on("end", () => resolve(body));
+      }));
+      response.writeHead(202);
+      response.end(JSON.stringify({ jobId: "job-test", state: "running" }));
+      return;
+    }
+    response.end(JSON.stringify({ jobId: "job-test", state: "running", logs: ["Waiting for GPU"] }));
+  });
+  await new Promise((resolve) => bridge.listen(0, "127.0.0.1", resolve));
+  const bridgeUrl = `http://127.0.0.1:${bridge.address().port}`;
   const calls = [];
   const server = createServer({
+    projectRoot,
     inputDirectory,
     captureDirectory,
-    runcrateApiKey: "rc_live_test",
-    runcrateGpuType: "RTX4090",
-    runcrateSshKeyId: "key_test",
-    runcrateSshPrivateKeyPath: "/runcrate-ssh/id_ed25519",
-    runcrateMaxRuntimeMinutes: "90",
-    spawnProcess(command, args, options) {
-      calls.push({ command, args, options });
-      return new FakeChild();
-    },
+    outputVideo: path.join(projectRoot, "output", "final_movie.mp4"),
+    runcrateBridgeUrl: bridgeUrl,
+    runcrateBridgeTokenPath: tokenPath,
+    runcrateInstance: "face-swap",
+    spawnProcess(...args) { calls.push(args); throw new Error("local processing must not run"); },
   });
 
   await withServer(server, async (baseUrl) => {
@@ -226,18 +248,27 @@ test("dispatches processing to Runcrate when an API key is configured", async ()
         video: "movie.mp4",
         sourceFace: "capture:face_manual.jpg",
         participantConsent: true,
+        shutdownAfterJob: true,
       }),
     });
     assert.equal(response.status, 202);
-    assert.deepEqual(calls[0].args.slice(0, 3), ["-m", "src.runcrate_worker", "--source-face"]);
-    assert.equal(calls[0].args.includes("--device"), false);
-    assert.equal(calls[0].args[calls[0].args.indexOf("--gpu-type") + 1], "RTX4090");
-    assert.equal(calls[0].args[calls[0].args.indexOf("--ssh-key-id") + 1], "key_test");
-    assert.equal(calls[0].options.env.RUNCRATE_API_KEY, "rc_live_test");
-    assert.equal(calls[0].args.includes("rc_live_test"), false);
+    assert.deepEqual(submittedJob, {
+      instance: "face-swap",
+      video: "input/movie.mp4",
+      sourceFace: "output/captured_faces/face_manual.jpg",
+      output: submittedJob.output,
+      maxSeconds: null,
+      shutdownAfterJob: true,
+    });
+    assert.match(submittedJob.output, /^output\/final_movie_\d{8}_\d{6}\.mp4$/);
+    assert.equal(calls.length, 0);
+
+    const status = await (await fetch(`${baseUrl}/api/status`)).json();
+    assert.equal(status.state, "running");
+    assert.deepEqual(status.logs, ["Waiting for GPU"]);
   }).finally(async () => {
-    await fs.rm(inputDirectory, { recursive: true, force: true });
-    await fs.rm(captureDirectory, { recursive: true, force: true });
+    await new Promise((resolve) => bridge.close(resolve));
+    await fs.rm(projectRoot, { recursive: true, force: true });
   });
 });
 
@@ -261,6 +292,8 @@ test("uses a timestamped output name and serves the newest generated video", asy
   await withServer(server, async (baseUrl) => {
     await fs.writeFile(olderVideo, Buffer.from("older"));
     await fs.writeFile(newestVideo, Buffer.from("newest"));
+    await fs.utimes(olderVideo, new Date("2024-01-01T00:00:00Z"), new Date("2024-01-01T00:00:00Z"));
+    await fs.utimes(newestVideo, new Date("2024-01-02T00:00:00Z"), new Date("2024-01-02T00:00:00Z"));
 
     const started = await fetch(`${baseUrl}/api/start`, {
       method: "POST",

@@ -2,8 +2,8 @@
 
 Replaces one visible face in a **prerecorded MP4** with the face from a **photo of a consenting person**,
 and writes a new MP4 that keeps the original audio. It runs on CPU by default and can optionally use an NVIDIA
-CUDA GPU or offload processing to a temporary Runcrate instance. Local processing does not upload files; cloud
-processing transfers the selected media and authorized model files to the rented machine. Model weights are
+CUDA GPU or offload processing to an existing Runcrate GPU instance. Local processing does not upload files;
+cloud processing transfers the selected media and authorized model files to the rented machine. Model weights are
 never downloaded automatically.
 
 > Only process footage and face photos you have the right to use, and only swap in the face of someone who
@@ -70,38 +70,57 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
 ```
 
-Packages: `numpy`, `opencv-python`, `onnxruntime` (CPU by default), `insightface` (used only as a library for the
-SCRFD detector, ArcFace recognizer and the InSwapper wrapper; its model auto-download is never used), and
-`runcrate-sdk` for optional remote processing.
+Packages: `numpy`, `opencv-python`, `onnxruntime` (CPU by default), and `insightface` (used only as a library for
+the SCRFD detector, ArcFace recognizer and the InSwapper wrapper; its model auto-download is never used).
 
 ## Run the laptop UI with a Runcrate GPU
 
-The UI stays on your laptop. When `RUNCRATE_API_KEY` is set, each processing request creates one GPU instance,
-copies the selected video segment, face photo, and three model files over SSH, runs the processor with CUDA,
-downloads the result into local `output/`, then terminates the instance. Without an API key, the existing local
-CPU path is used. The remote instance has a maximum runtime as a billing safeguard.
+The web UI runs in Docker on the laptop, while the Runcrate CLI and its login session stay on the laptop. The
+small host-side bridge passes jobs from the container to that authenticated CLI; no Runcrate API token or SSH
+private key is copied into Docker. This workflow reuses the already-running `face-swap` instance and never
+creates another instance. The default behavior leaves it running after processing.
 
-1. In Runcrate, register the public half of an SSH key and note its SSH key ID. To create a dedicated key in
-  PowerShell, run `New-Item -ItemType Directory -Force .secrets` followed by
-  `ssh-keygen -t ed25519 -f .secrets/id_ed25519 -C deepfake-cinema`, then add the contents of
-  `.secrets/id_ed25519.pub` in Runcrate. The unattended app needs a key without a passphrase; protect this
-  dedicated private key with your Windows account. Keep it at `.secrets/id_ed25519`. The private key is
-  mounted read-only into the app container and is never sent as a file to Runcrate.
-2. Copy `.env.example` to `.env`. Fill in `RUNCRATE_API_KEY` and `RUNCRATE_SSH_KEY_ID`; the default private-key
-  path already matches the Compose mount. `RUNCRATE_GPU_TYPE` defaults to `RTX4090`; `RUNCRATE_MAX_RUNTIME_MINUTES`
-  defaults to `240` and accepts values from 5 to 10080.
-3. Start the laptop UI:
+On the laptop, first authenticate and confirm the named instance is running:
 
-```powershell
-Copy-Item .env.example .env
-docker compose up --build
+```bash
+runcrate login
+runcrate instances status face-swap
 ```
 
-Open <http://localhost:3000>, upload/select a video and face, confirm consent, and start processing. The API key
-is only used by the local server; it is not sent to the browser or GPU instance. The video, selected face photo,
-and authorized models are transferred to Runcrate for the job. The remote instance is terminated afterward;
-the original inputs and downloaded result remain on your laptop. Runcrate setup requires an active account,
-credits, a registered SSH key, and the matching private key available locally.
+Then start the complete app from the project directory:
+
+```bash
+chmod +x scripts/start-with-runcrate.sh
+./scripts/start-with-runcrate.sh
+```
+
+The script creates a private local bridge token file (ignored by Git), starts the bridge bound to Docker's local
+bridge gateway, and runs `docker compose up --build`. Open <http://localhost:3000>, select or capture a face,
+select a video and scene range, confirm consent, then choose **Start experience**. The browser shows the source
+film while processing; when ready it can play the stitched result. The bridge checks the instance state and waits
+while it is deploying. If it is stopped or unavailable, start it yourself in Runcrate and retry.
+
+For a small end-to-end test, put a short authorized video at `input/test_clip.mp4`, select a short scene (for
+example 0-3 seconds), use a saved/captured face, confirm consent, and start the experience. Monitor the processing
+log. The result is downloaded to `output/` on the laptop. The host worker uploads the selected clip, selected face,
+processor source/dependency files, and required model files only; it does not upload the full source film when a
+scene range is selected. It removes its temporary remote job directory after processing.
+
+The instance remains running and can continue to incur charges. Check GPU use with:
+
+```bash
+runcrate ssh face-swap -- nvidia-smi
+```
+
+When finished, shut it down deliberately in the Runcrate dashboard. The UI also offers **Delete the Runcrate
+instance after a successful job**; this is off by default and deletes the instance rather than merely pausing it.
+Only enable it if you intend to delete that instance.
+
+The Runcrate CLI must be installed and logged in as the same laptop user that runs the startup script. Docker,
+the existing Runcrate instance, valid model files at the paths below, and permission to process the selected media
+are required. The Docker image includes FFmpeg for scene extraction and stitching. The web app does not set up CLI
+authentication or create/restart instances. The instance must have internet access to install the CUDA runtime
+dependencies on its first job.
 
 ## Optional: NVIDIA CUDA inference
 
