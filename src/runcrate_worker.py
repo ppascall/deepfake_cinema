@@ -124,8 +124,9 @@ def check_local_models(project_root: Path = PROJECT_ROOT) -> dict[Path, int]:
 
 def remote_models_cached(instance: str, sizes: dict[Path, int]) -> bool:
     """True when every model already exists on the instance with the expected size."""
-    paths = [shlex.quote(str(REMOTE_MODEL_DIR / relative.relative_to("models"))) for relative in sizes]
-    command = ["runcrate", "ssh", instance, "--", "bash", "-lc", "stat -c %s " + " ".join(paths)]
+    paths = [str(REMOTE_MODEL_DIR / relative.relative_to("models")) for relative in sizes]
+    # runcrate ssh joins arguments without quoting, so pass a plain command rather than bash -c.
+    command = ["runcrate", "ssh", instance, "--", "stat", "-c", "%s", *paths]
     try:
         result = subprocess.run(command, capture_output=True, text=True, timeout=120)
     except (OSError, subprocess.TimeoutExpired):
@@ -152,10 +153,9 @@ def ensure_remote_models(instance: str, stage_root: Path, project_root: Path = P
     try:
         run_cli(["runcrate", "cp", "-r", str(models_dir), f"{instance}:/root/"],
                 "uploading the face models")
-        run_ssh_args(instance, "bash", "-c",
-                     f"mkdir -p {shlex.quote(str(REMOTE_MODEL_DIR.parent))} && "
-                     f"rm -rf {shlex.quote(str(REMOTE_MODEL_DIR))} && "
-                     f"mv {shlex.quote(str(remote_stage))} {shlex.quote(str(REMOTE_MODEL_DIR))}")
+        run_ssh_args(instance, "mkdir", "-p", str(REMOTE_MODEL_DIR.parent))
+        run_ssh_args(instance, "rm", "-rf", str(REMOTE_MODEL_DIR))
+        run_ssh_args(instance, "mv", str(remote_stage), str(REMOTE_MODEL_DIR))
     finally:
         shutil.rmtree(models_dir, ignore_errors=True)
 
