@@ -1,0 +1,2 @@
+runcrate instances create --name face-swap --gpu RTX4090 --max-runtime 4h
+./scripts/start-with-runcrate.sh
